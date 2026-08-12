@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "latent-program-moe"
+version = "0.1.0"
+description = "Latent-program MoE: SO(3) conjugation hypernetwork over a frozen transformer"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+    "transformers>=5.0",
+    "datasets",
+    "peft",
+    "numpy",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["lpm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gpt2: tests that load the real pretrained GPT-2 small checkpoint (needs network/HF cache)",
+]

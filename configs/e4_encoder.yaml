@@ -1,0 +1,26 @@
+# E4 — encoder amortization + generalization (spec §7 phase 2, §10 E4).
+# Train the encoder leave-one-out (--tasks without the held-out task), then
+# eval_encoder.py --task <held-out>.
+base_model: gpt2
+enable_gains: false
+tie_qk_across_heads: false
+field_init_sigma: 0.001
+lambda_h: 0.1
+lambda_reg: 0.0001
+lambda_geo: 1.0
+lambda_task: 1.0
+refine_steps: 0
+refine_lr: 0.001
+optimizer:
+  lr: 0.0001
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  grad_clip: 1.0
+  steps: 3000
+  warmup_steps: 100
+  schedule: cosine
+  batch_size: 4
+data:
+  experts_dir: experts
+  z_dir: runs/e1
+  out_dir: runs/encoder

@@ -1,0 +1,24 @@
+# E2 — geodesic merging (spec §10): slerp_field sweeps vs weight-space
+# baselines on E1 expert pairs.
+base_model: gpt2
+enable_gains: false
+tie_qk_across_heads: false
+field_init_sigma: 0.001
+lambda_h: 0.1
+lambda_reg: 0.0001
+lambda_geo: 1.0
+lambda_task: 1.0
+refine_steps: 0
+refine_lr: 0.001
+optimizer:
+  lr: 0.001
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+  grad_clip: 1.0
+  steps: 0
+  warmup_steps: 0
+  schedule: cosine
+  batch_size: 8
+data:
+  z_dir: runs/e1
+  experts_dir: experts

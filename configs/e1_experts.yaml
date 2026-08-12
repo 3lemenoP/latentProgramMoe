@@ -1,0 +1,24 @@
+# E1 — expert reconstruction (spec §10): phase-1 direct fits on GPT-2 small.
+# Set enable_gains per the E0 decision before running phase 1.
+base_model: gpt2
+enable_gains: false
+tie_qk_across_heads: false
+field_init_sigma: 0.001
+lambda_h: 0.1
+lambda_reg: 0.0001
+lambda_geo: 1.0
+lambda_task: 1.0
+refine_steps: 0
+refine_lr: 0.001
+optimizer:
+  lr: 0.001
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+  grad_clip: 1.0
+  steps: 3000
+  warmup_steps: 50
+  schedule: cosine
+  batch_size: 8
+data:
+  experts_dir: experts
+  out_dir: runs/e1
