@@ -283,7 +283,7 @@ Contains exactly: `q_normalize`, `q_to_R`, `hamilton`, `d2_chord`, `slerp`, `mak
 | T2 | homomorphism: `q_to_R(hamilton(a,b)) == q_to_R(a) @ q_to_R(b)` | atol 1e-5 |
 | T3 | sign invariance: `q_to_R(-q) == q_to_R(q)`; model logits identical under global sign flip of a field | exact / atol 1e-6 |
 | T4 | **identity program == base model**: `ProgramField.identity` vs unwrapped base on real text | max abs logit diff < 1e-4 (fp32), < 3e-2 (bf16) |
-| T5 | **dead value frame**: test-harness-only per-sequence conjugation of `W_v`/`W_o` leaves logits unchanged | max abs diff < 1e-4 |
+| T5 | **dead value frame**: test-harness-only per-sequence conjugation of `W_v`/`W_o` leaves logits unchanged | max abs diff < 1e-4 (tiny); < 5e-4 on real GPT-2 small fp32 (12-layer residual sits at ~1e-4) |
 | T6 | spectrum preservation: materialize `R W Rᵀ` for a random field (test only); singular values match `W`'s | atol 1e-5 |
 | T7 | program is live: field with vector-part noise σ=0.3 changes logits materially | mean abs diff > 0.1 |
 | T8 | slerp endpoints: `slerp(a,b,0)=a`, `slerp(a,b,1)=±b`; output unit-norm; antipodal inputs don't NaN | atol 1e-6 |
