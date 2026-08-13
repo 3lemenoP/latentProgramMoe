@@ -11,7 +11,8 @@ evals. Each contrastive task provides:
                           composed behavior "a then b" has ground-truth text
                           b.transform(a.texts()) for the phase-3 curriculum
 
-HF datasets used (all small): wikitext-2-raw-v1, opus_books en-fr, sst2.
+HF datasets used (all small, namespaced IDs required by huggingface_hub>=1.16):
+Salesforce/wikitext, Helsinki-NLP/opus_books, stanfordnlp/sst2.
 `jsonish` is fully synthetic/offline.
 """
 from __future__ import annotations
@@ -55,7 +56,7 @@ class Task:
 
 def _wikitext(split: str, n: int) -> List[str]:
     from datasets import load_dataset
-    ds = load_dataset("wikitext", "wikitext-2-raw-v1",
+    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1",
                       split="train" if split == "train" else "validation")
     out = [t.strip() for t in ds["text"] if len(t.strip()) > 80]
     return out[:n]
@@ -91,7 +92,7 @@ class FrenchTask(Task):
         from datasets import load_dataset
         if split == "eval" and n > self._EVAL_RESERVE:
             raise ValueError(f"french eval pool holds {self._EVAL_RESERVE} rows, asked {n}")
-        ds = load_dataset("opus_books", "en-fr", split="train")
+        ds = load_dataset("Helsinki-NLP/opus_books", "en-fr", split="train")
         want = self._EVAL_RESERVE + (0 if split == "eval" else n)
         rows = [r["translation"] for r in ds.select(range(min(4 * want + 400, len(ds))))]
         rows = [r for r in rows if len(r["fr"]) > 40]
@@ -141,7 +142,8 @@ class SentimentTask(Task):
 
     def texts(self, split="train", n=2000):
         from datasets import load_dataset
-        ds = load_dataset("sst2", split="train" if split == "train" else "validation")
+        ds = load_dataset("stanfordnlp/sst2",
+                          split="train" if split == "train" else "validation")
         out = [r["sentence"].strip() for r in ds if r["label"] == 1
                and len(r["sentence"]) > 40]
         return out[:n]
