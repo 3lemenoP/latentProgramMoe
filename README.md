@@ -153,6 +153,11 @@ python scripts/eval_encoder.py --config configs/e4_encoder.yaml \
 
 ## Notes / decisions log
 
+- **E0 / enable_gains (2026-08-13)**: Mirsky audit on the four LoRA experts
+  (`french`, `caps`, `jsonish`, `sentiment`; 800 steps, GPT-2 small) gave
+  overall median ratio **0.028** (per-task medians 0.024–0.033) against the
+  spec threshold 0.3. Decision: **gains OFF** — recorded in
+  `configs/base.yaml`. Report: [`docs/reports/e0-mirsky.md`](docs/reports/e0-mirsky.md).
 - **transformers v5** (≥5.x) module interfaces; base loaded fp32 +
   `attn_implementation="eager"` by default. T4/T5 assert parity with the
   unwrapped base, so interface drift fails loudly.

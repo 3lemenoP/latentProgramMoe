@@ -1,5 +1,6 @@
-# LPMConfig defaults (lpm/config.py), mirrored 1:1. enable_gains is decided by
-# E0 (scripts/audit_mirsky.py, spec §10) and recorded here — see docs/reports.
+# LPMConfig defaults (lpm/config.py), mirrored 1:1.
+# E0 2026-08-13 (GPT-2, 4 LoRA experts, 800 steps): overall median Mirsky
+# ratio 0.028 < 0.3 → gains OFF. Full table: docs/reports/e0-mirsky.md
 base_model: gpt2
 enable_gains: false
 tie_qk_across_heads: false

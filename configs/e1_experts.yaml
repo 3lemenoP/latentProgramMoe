@@ -1,5 +1,5 @@
 # E1 — expert reconstruction (spec §10): phase-1 direct fits on GPT-2 small.
-# Set enable_gains per the E0 decision before running phase 1.
+# enable_gains false per E0 (median Mirsky ratio 0.028).
 base_model: gpt2
 enable_gains: false
 tie_qk_across_heads: false
