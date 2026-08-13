@@ -76,15 +76,28 @@ class CapsTask(Task):
 
 
 class FrenchTask(Task):
-    """French continuation / en->fr demos (opus_books)."""
+    """French continuation / en->fr demos (opus_books).
+
+    opus_books ships a single 'train' split, so we carve our own: the first
+    _EVAL_RESERVE filtered rows are the eval pool and train starts AFTER the
+    reserve. This keeps the two splits disjoint for ANY requested train size
+    (a moving-offset scheme like train=rows[:n] / eval=rows[400:400+n] silently
+    nests eval inside train whenever n > 400, which contaminated E1/E2/E4)."""
     name = "french"
+
+    _EVAL_RESERVE = 800
 
     def _rows(self, split: str, n: int):
         from datasets import load_dataset
+        if split == "eval" and n > self._EVAL_RESERVE:
+            raise ValueError(f"french eval pool holds {self._EVAL_RESERVE} rows, asked {n}")
         ds = load_dataset("opus_books", "en-fr", split="train")
-        rows = [r["translation"] for r in ds.select(range(min(4 * n + 400, len(ds))))]
+        want = self._EVAL_RESERVE + (0 if split == "eval" else n)
+        rows = [r["translation"] for r in ds.select(range(min(4 * want + 400, len(ds))))]
         rows = [r for r in rows if len(r["fr"]) > 40]
-        return rows[400:400 + n] if split == "eval" else rows[:n]
+        if split == "eval":
+            return rows[:n]
+        return rows[self._EVAL_RESERVE:self._EVAL_RESERVE + n]
 
     def texts(self, split="train", n=2000):
         return [r["fr"] for r in self._rows(split, n)]

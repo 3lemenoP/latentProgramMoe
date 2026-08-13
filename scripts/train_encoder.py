@@ -104,13 +104,31 @@ def main():
                      enable_gains=cfg.enable_gains).to(device)
     opt = torch.optim.AdamW(enc.parameters(), lr=args.lr, weight_decay=0.01)
 
+    def budget_pair_demos(demos_a, demos_b, k_each, budget=960):
+        """Pick up to k_each demos per task, trimmed so BOTH halves fit the
+        encoder's 1024-token window (a-half capped at ~budget/2, b-half gets
+        the remainder). format_demos truncates from the RIGHT, so an
+        unbudgeted a-then-b concat at K>=16 silently deletes every task-b
+        demo and supervises the composed target on b-free input."""
+        def take(pool, k, cap):
+            picked, used = [], 0
+            for d in rng.sample(pool, min(k, len(pool))):
+                t = len(tok.encode(f"INPUT: {d[0]}\nOUTPUT: {d[1]}\n")) + 1
+                if used + t > cap and picked:
+                    break
+                picked.append(d)
+                used += t
+            return picked, used
+        a_part, used_a = take(demos_a, k_each, budget // 2)
+        b_part, _ = take(demos_b, k_each, budget - used_a)
+        return a_part + b_part
+
     for step in range(args.steps):
         use_pair = args.compositional and pair_targets and rng.random() < 0.5
         if use_pair:
             a, b = rng.choice(list(pair_targets))
             K = rng.choice(args.k_choices)
-            demos = (rng.sample(demo_train[a], min(K // 2 + 1, len(demo_train[a]))) +
-                     rng.sample(demo_train[b], min(K // 2 + 1, len(demo_train[b]))))
+            demos = budget_pair_demos(demo_train[a], demo_train[b], K // 2 + 1)
             target = pair_targets[(a, b)]
             blocks = pair_blocks.get((a, b))
         else:

@@ -79,11 +79,14 @@ def train_expert(args, task, device):
     merged.save_pretrained(str(out / "merged"))
     tok.save_pretrained(str(out / "merged"))
 
-    demos = task.demo_pairs("train", 512) + task.demo_pairs("eval", 128)
+    # label by actual membership — demo_pairs returns UP TO n pairs, so an
+    # index-based "i < 512" label would mislabel eval demos as train whenever
+    # the train pool comes up short
     with open(out / "demos.jsonl", "w", encoding="utf-8") as f:
-        for i, (x, y) in enumerate(demos):
-            f.write(json.dumps({"input": x, "output": y,
-                                "split": "train" if i < 512 else "eval"}) + "\n")
+        for split_name, n_pairs in (("train", 512), ("eval", 128)):
+            for x, y in task.demo_pairs(split_name, n_pairs):
+                f.write(json.dumps({"input": x, "output": y,
+                                    "split": split_name}) + "\n")
 
     report = {"task": task.name, "base": args.base, "steps": args.steps,
               "lora_r": args.lora_r, "ce_base": ce_base, "ce_expert": ce_expert,

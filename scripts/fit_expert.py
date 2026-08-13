@@ -4,7 +4,7 @@
 expert fine-tune:
 
     L = KL( p_expert || p_program )                       on expert-domain data
-      + lambda_h  * mean_l MSE(hidden_l^expert, hidden_l^program)
+      + lambda_h  * sum_l MSE(hidden_l^expert, hidden_l^program)
       + lambda_reg * sum_sites d2_chord(q, identity)
 
 Usage:
@@ -36,11 +36,11 @@ def distill_loss(program_out, teacher_out, cfg: LPMConfig, field: ProgramField):
     p_t = F.softmax(teacher_out.logits, dim=-1)
     kl = F.kl_div(logp.flatten(0, 1), p_t.flatten(0, 1), reduction="batchmean")
 
+    # spec §7: lambda_h * SUM_l MSE(hidden_l) — summed like the reg term, not
+    # averaged (a mean would silently weaken the anchor by n_layers).
     h_mse = 0.0
-    n_layers = len(teacher_out.hidden_states) - 1
     for ht, hp in zip(teacher_out.hidden_states[1:], program_out.hidden_states[1:]):
         h_mse = h_mse + F.mse_loss(hp, ht)
-    h_mse = h_mse / max(n_layers, 1)
 
     reg = field.chordal_reg_to_identity()
     return kl + cfg.lambda_h * h_mse + cfg.lambda_reg * reg, kl, h_mse, reg

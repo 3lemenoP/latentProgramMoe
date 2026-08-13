@@ -30,14 +30,18 @@ def _check_specs(*fields: ProgramField) -> FieldSpec:
 
 
 def _merged_rhos(fields: Sequence[ProgramField], combine) -> Optional[Dict[SiteKey, torch.Tensor]]:
-    """If any input has gains, treat missing gains as rho=0 and combine."""
+    """If any input has gains, treat missing gains as rho=0 and combine.
+    Zeros are created on the gains-carrying field's device (a bare
+    torch.zeros would land on CPU and crash the combine on CUDA fields)."""
     if not any(f.has_gains for f in fields):
         return None
     spec = fields[0].spec
+    ref = next(f for f in fields if f.has_gains)
+    dev = ref.rho(*spec.site_keys()[0]).device
     out = {}
     for k in spec.site_keys():
         rhos = [f.rho(*k).float() if f.has_gains else
-                torch.zeros(spec.site_shape(k[1])) for f in fields]
+                torch.zeros(spec.site_shape(k[1]), device=dev) for f in fields]
         out[k] = combine(rhos)
     return out
 
@@ -84,12 +88,14 @@ def slerp_field(f0: ProgramField, f1: ProgramField, alpha: AlphaLike) -> Program
                          q_normalize(f1.q(*k).float()), a)
     rho = None
     if f0.has_gains or f1.has_gains:
+        ref = f0 if f0.has_gains else f1
+        dev = ref.rho(*spec.site_keys()[0]).device
         rho = {}
         for k in spec.site_keys():
             a = _resolve_alpha(alpha, k, spec.n_layers)
             a = float(a) if not isinstance(a, torch.Tensor) else a.float()
-            r0 = f0.rho(*k).float() if f0.has_gains else torch.zeros(spec.site_shape(k[1]))
-            r1 = f1.rho(*k).float() if f1.has_gains else torch.zeros(spec.site_shape(k[1]))
+            r0 = f0.rho(*k).float() if f0.has_gains else torch.zeros(spec.site_shape(k[1]), device=dev)
+            r1 = f1.rho(*k).float() if f1.has_gains else torch.zeros(spec.site_shape(k[1]), device=dev)
             rho[k] = (1 - a) * r0 + a * r1
     return ProgramField(spec, quats, rho, trainable=False)
 

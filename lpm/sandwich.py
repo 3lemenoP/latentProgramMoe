@@ -1,40 +1,36 @@
 """lpm/sandwich.py — sandwiched module forwards (spec §3).
 
-Wrapping happens at the MODULE-FORWARD level, never the weight level: each
-wrapper holds a reference to the frozen base submodule and re-runs its exact
-computation with activation rotations inserted. Base weights are never modified
-or materialized in rotated form. With no program installed (state.field is
-None) the wrapper delegates to the base forward verbatim.
+Wraps at the MODULE-FORWARD level, never the weight level: wrapper nn.Modules
+hold references to the frozen base submodules plus a shared ProgramState; base
+weights are never modified or materialized in rotated form. With no program
+installed (state.field is None) every wrapper delegates verbatim to the base
+module — the unwrapped path bit-for-bit.
 
-Attention / MLP structure (spec §3.1-§3.3), with R = R(attn_io) or R(mlp_io),
-S = R(ffn_hidden), M = R(qk_rel) per head:
+Written against transformers v5 (>=5.0): attention modules return
+(attn_output, attn_weights) and dispatch the inner product through
+ALL_ATTENTION_FUNCTIONS; we reuse the exact same interface lookup so the
+sandwich path uses the same attention backend as the base (T4 parity).
 
-    u   = R^T x               enter module frame (x is the post-LN input)
-    ... base projections ...
-    out = R y                 exit to residual frame
+qk_rel placement (spec §3.3): the spec writes the relative transport as
+k <- M k inside the logits. We implement the numerically identical q-side form
+q <- M^T q (since q^T (M k) = (M^T q)^T k), applied AFTER base RoPE when the
+base has RoPE. Why q-side: (a) the qk_rel rotation M never enters the KV
+cache; (b) under GQA (Llama-family) the per-attention-head field applies to q,
+which has the full head count, without touching shared KV heads. Equivalence
+is asserted by tests/test_sandwich.py::test_qk_rel_query_side_equivalence.
+NOTE the cache is still program-DEPENDENT: cached k/v are computed from
+u = R(attn_io)^T x, and x itself passed through earlier sandwiched layers —
+never swap programs mid-generation with a live cache (any placement of M
+would have this property; tested one-program cache parity only).
+With gains enabled the k-side form is k <- g ⊙ (M k); its exact q-side
+transpose is q <- M^T (g ⊙ q) — gain BEFORE the inverse rotation.
 
-The qk_rel rotation enters the logits as q^T (M k) — the gauge-invariant
-relative element. Two equivalent placements are used:
-
-  * GPT-2 (no RoPE): k <- M k after the k projection (spec-literal form).
-    NOTE: with use_cache=True the KV cache then holds ROTATED keys — do not
-    swap programs mid-generation with a live cache.
-  * Llama (RoPE + GQA): q <- M^T q AFTER RoPE. Identical logits
-    (q^T M k == (M^T q)^T k), but GQA-safe (k has fewer heads than the
-    per-attention-head field) and the KV cache stays program-independent.
-    Order convention (spec §3.3): the relative rotation applies after RoPE.
-
-Abelian gains (spec §4, if the field has them) apply immediately after the
-corresponding forward rotation. For SwiGLU, where S appears on both branches,
-the ffn_hidden gain is applied ONCE, on the up (value) branch, so the product
-carries the gain exactly once — mirroring the single-branch GELU case.
-
-Dropout submodules stay inside the sandwich (wrap-the-module semantics); run
-the model in eval() during field training so distillation is deterministic.
-
-Written against transformers v5 module interfaces (GPT2Attention/GPT2MLP,
-LlamaAttention/LlamaMLP return conventions); T4/T5 assert parity with the
-unwrapped base, so any drift in those interfaces fails loudly in tests.
+Gain attachment points (spec §4: "immediately after the corresponding forward
+rotation"): attn_io / mlp_io at module exit (out <- g ⊙ (R y)); ffn_hidden on
+entry to the activation frame (a <- g ⊙ (S a)); qk_rel per the transpose above.
+For SwiGLU the ffn_hidden gain is applied to the up branch only (the product
+h = silu(g_gate) ⊙ a is linear in a, so one application scales the hidden unit
+once; applying it to both branches would square it).
 """
 from __future__ import annotations
 
@@ -43,185 +39,173 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from transformers.cache_utils import EncoderDecoderCache
-from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
-from transformers.models.gpt2.modeling_gpt2 import (
-    eager_attention_forward as gpt2_eager_attention_forward,
-)
-from transformers.models.llama.modeling_llama import (
-    apply_rotary_pos_emb,
-    eager_attention_forward as llama_eager_attention_forward,
-)
-
 from .field import FieldSpec
 from .gains import apply_gain, apply_gain_head
 from .quaternion import apply_rot, apply_rot_head
 
+try:  # transformers is required for the sandwich/model layer, not for kernels
+    from transformers.cache_utils import EncoderDecoderCache
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+    from transformers.models.gpt2.modeling_gpt2 import (
+        eager_attention_forward as gpt2_eager_attention_forward,
+    )
+except ImportError as _e:  # pragma: no cover
+    EncoderDecoderCache = None
+    ALL_ATTENTION_FUNCTIONS = None
+    gpt2_eager_attention_forward = None
+
 
 class ProgramState:
-    """Shared mutable slot holding the currently installed ProgramField (or
-    None = raw base model). One instance per wrapped model; every sandwich
-    wrapper keeps a reference."""
+    """Shared mutable slot for the currently installed ProgramField.
 
-    def __init__(self):
+    All sandwich wrappers of one model hold the same instance; the program()
+    context manager (lpm/model_wrap.py) swaps .field. Rotations/gains are
+    fetched lazily via field.rotations()/field.gains(), whose caching handles
+    both the constant-field inference case (build once) and the training case
+    (rebuild per step, graph attached)."""
+
+    def __init__(self) -> None:
         self.field = None
 
 
-def _check_device(R: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-    if R.device != x.device:
-        raise RuntimeError(
-            f"ProgramField rotations live on {R.device} but activations on "
-            f"{x.device}; move the field first: field.to(model_device)")
-    return R
-
-
-class SandwichGPT2Attention(nn.Module):
-    """Spec §3.3 around a frozen transformers GPT2Attention (self-attention only)."""
-
-    def __init__(self, base, layer_idx: int, state: ProgramState, spec: FieldSpec):
+class _SandwichBase(nn.Module):
+    def __init__(self, base: nn.Module, layer_idx: int, state: ProgramState, spec: FieldSpec):
         super().__init__()
-        if getattr(base, "is_cross_attention", False):
-            raise NotImplementedError("cross-attention sandwich is out of scope (v1)")
         self.base = base
         self.layer_idx = layer_idx
         self.spec = spec
-        self.part_io = spec.partition("attn_io")
-        self.part_head = spec.partition("qk_rel")
-        # plain attribute on purpose: shared state, not a submodule
-        object.__setattr__(self, "state", state)
+        self.state = state
+        self.d_part = spec.partition("attn_io")   # == mlp_io partition (d_model)
+        self.f_part = spec.partition("ffn_hidden")
+        self.h_part = spec.partition("qk_rel")
+
+
+# ---------------------------------------------------------------------------
+# GPT-2
+# ---------------------------------------------------------------------------
+class SandwichGPT2Attention(_SandwichBase):
+    """Spec §3.3 around transformers v5 GPT2Attention.
+
+    u   = R^T x                     (enter module frame; R = R(attn_io))
+    qkv = c_attn(u), split to heads
+    q   = M^T q                     (relative transport, q-side form; M = R(qk_rel))
+    attn= softmax(q k^T * scaling + mask) v      (base interface, untouched)
+    o   = c_proj(merge_heads(attn)); out = R o   (exit to residual frame)
+    """
 
     def forward(self, hidden_states, past_key_values=None, attention_mask=None,
-                encoder_hidden_states=None, encoder_attention_mask=None, **kwargs):
-        if self.state.field is None:
+                encoder_hidden_states=None, encoder_attention_mask=None,
+                output_attentions=False, **kwargs):
+        field = self.state.field
+        if field is None:
             return self.base(hidden_states, past_key_values=past_key_values,
                              attention_mask=attention_mask,
                              encoder_hidden_states=encoder_hidden_states,
-                             encoder_attention_mask=encoder_attention_mask, **kwargs)
+                             encoder_attention_mask=encoder_attention_mask,
+                             output_attentions=output_attentions, **kwargs)
         if encoder_hidden_states is not None:
-            raise NotImplementedError("cross-attention sandwich is out of scope (v1)")
-
+            raise NotImplementedError("sandwich does not support cross-attention")
         base = self.base
-        field = self.state.field
+        if base.reorder_and_upcast_attn:
+            raise NotImplementedError("reorder_and_upcast_attn is unsupported under a program")
+
         rot = field.rotations()
         gains = field.gains()
-        R = _check_device(rot[(self.layer_idx, "attn_io")], hidden_states)
+        R = rot[(self.layer_idx, "attn_io")]
         M = rot[(self.layer_idx, "qk_rel")]
 
-        # enter module frame
-        u = apply_rot(hidden_states, R, self.part_io, inverse=True)
+        u = apply_rot(hidden_states, R, self.d_part, inverse=True)
 
         query_states, key_states, value_states = base.c_attn(u).split(base.split_size, dim=2)
-        shape_q = (*query_states.shape[:-1], -1, base.head_dim)
-        shape_kv = (*key_states.shape[:-1], -1, base.head_dim)
-        query_states = query_states.view(shape_q).transpose(1, 2)
-        key_states = key_states.view(shape_kv).transpose(1, 2)
-        value_states = value_states.view(shape_kv).transpose(1, 2)
+        shape = (*key_states.shape[:-1], -1, base.head_dim)
+        query_states = query_states.view(shape).transpose(1, 2)
+        key_states = key_states.view(shape).transpose(1, 2)
+        value_states = value_states.view(shape).transpose(1, 2)
 
-        # relative key transport (GPT-2 has no RoPE; spec §3.3)
-        key_states = apply_rot_head(key_states, M, self.part_head)
+        # q-side relative transport (== k <- g ⊙ (M k) on the k side)
         if gains is not None:
-            key_states = apply_gain_head(key_states, gains[(self.layer_idx, "qk_rel")],
-                                         self.part_head)
+            query_states = apply_gain_head(query_states, gains[(self.layer_idx, "qk_rel")], self.h_part)
+        query_states = apply_rot_head(query_states, M, self.h_part, inverse=True)
 
         if past_key_values is not None:
             curr = (past_key_values.self_attention_cache
                     if isinstance(past_key_values, EncoderDecoderCache) else past_key_values)
             key_states, value_states = curr.update(key_states, value_states, base.layer_idx)
 
-        using_eager = base.config._attn_implementation == "eager"
         attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
             base.config._attn_implementation, gpt2_eager_attention_forward)
-
-        if using_eager and base.reorder_and_upcast_attn:
-            attn_output, attn_weights = base._upcast_and_reordered_attn(
-                query_states, key_states, value_states, attention_mask)
-        else:
-            attn_output, attn_weights = attention_interface(
-                base, query_states, key_states, value_states, attention_mask,
-                dropout=base.attn_dropout.p if base.training else 0.0,
-                scaling=base.scaling, **kwargs)
+        attn_output, attn_weights = attention_interface(
+            base, query_states, key_states, value_states, attention_mask,
+            dropout=base.attn_dropout.p if base.training else 0.0,
+            scaling=base.scaling, **kwargs)
 
         attn_output = attn_output.reshape(*attn_output.shape[:-2], -1).contiguous()
-        o = base.c_proj(attn_output)
-        o = base.resid_dropout(o)
+        attn_output = base.c_proj(attn_output)
+        attn_output = base.resid_dropout(attn_output)
 
-        # exit to residual frame
-        out = apply_rot(o, R, self.part_io)
+        out = apply_rot(attn_output, R, self.d_part)
         if gains is not None:
-            out = apply_gain(out, gains[(self.layer_idx, "attn_io")], self.part_io)
+            out = apply_gain(out, gains[(self.layer_idx, "attn_io")], self.d_part)
         return out, attn_weights
 
 
-class SandwichGPT2MLP(nn.Module):
-    """Spec §3.1 (GELU variant) around a frozen transformers GPT2MLP."""
-
-    def __init__(self, base, layer_idx: int, state: ProgramState, spec: FieldSpec):
-        super().__init__()
-        self.base = base
-        self.layer_idx = layer_idx
-        self.spec = spec
-        self.part_io = spec.partition("mlp_io")
-        self.part_hidden = spec.partition("ffn_hidden")
-        object.__setattr__(self, "state", state)
+class SandwichGPT2MLP(_SandwichBase):
+    """Spec §3.1 (GELU variant). Both R and S sandwich a nonlinearity."""
 
     def forward(self, hidden_states):
-        if self.state.field is None:
+        field = self.state.field
+        if field is None:
             return self.base(hidden_states)
         base = self.base
-        field = self.state.field
         rot = field.rotations()
         gains = field.gains()
-        R = _check_device(rot[(self.layer_idx, "mlp_io")], hidden_states)
+        R = rot[(self.layer_idx, "mlp_io")]
         S = rot[(self.layer_idx, "ffn_hidden")]
 
-        u = apply_rot(hidden_states, R, self.part_io, inverse=True)
+        u = apply_rot(hidden_states, R, self.d_part, inverse=True)
         a = base.c_fc(u)
-        a = apply_rot(a, S, self.part_hidden)
+        a = apply_rot(a, S, self.f_part)
         if gains is not None:
-            a = apply_gain(a, gains[(self.layer_idx, "ffn_hidden")], self.part_hidden)
+            a = apply_gain(a, gains[(self.layer_idx, "ffn_hidden")], self.f_part)
         h = base.act(a)
-        h = apply_rot(h, S, self.part_hidden, inverse=True)
+        h = apply_rot(h, S, self.f_part, inverse=True)
         y = base.c_proj(h)
-        y = base.dropout(y)
-        out = apply_rot(y, R, self.part_io)
+        y = apply_rot(y, R, self.d_part)
         if gains is not None:
-            out = apply_gain(out, gains[(self.layer_idx, "mlp_io")], self.part_io)
-        return out
+            y = apply_gain(y, gains[(self.layer_idx, "mlp_io")], self.d_part)
+        return base.dropout(y)
 
 
-class SandwichLlamaAttention(nn.Module):
-    """Spec §3.3 around a frozen transformers LlamaAttention.
-
-    Relative transport applied on the QUERY side after RoPE: q <- M^T q, which
-    equals the spec's q^T (M k) logits exactly and is GQA/cache-safe (see
-    module docstring)."""
-
-    def __init__(self, base, layer_idx: int, state: ProgramState, spec: FieldSpec):
-        super().__init__()
-        self.base = base
-        self.layer_idx = layer_idx
-        self.spec = spec
-        self.part_io = spec.partition("attn_io")
-        self.part_head = spec.partition("qk_rel")
-        object.__setattr__(self, "state", state)
+# ---------------------------------------------------------------------------
+# Llama family (SwiGLU + RoPE)
+# ---------------------------------------------------------------------------
+class SandwichLlamaAttention(_SandwichBase):
+    """Spec §3.3 around transformers v5 LlamaAttention. M applies AFTER base
+    RoPE (2-blocks and 3-blocks don't commute; this order is the project
+    convention), on the q side per the module docstring."""
 
     def forward(self, hidden_states, position_embeddings=None, attention_mask=None,
                 past_key_values=None, **kwargs):
-        if self.state.field is None:
+        field = self.state.field
+        if field is None:
             return self.base(hidden_states, position_embeddings=position_embeddings,
                              attention_mask=attention_mask,
                              past_key_values=past_key_values, **kwargs)
         base = self.base
-        field = self.state.field
+        from transformers.models.llama.modeling_llama import (
+            apply_rotary_pos_emb,
+            eager_attention_forward as llama_eager_attention_forward,
+        )
+
         rot = field.rotations()
         gains = field.gains()
-        R = _check_device(rot[(self.layer_idx, "attn_io")], hidden_states)
+        R = rot[(self.layer_idx, "attn_io")]
         M = rot[(self.layer_idx, "qk_rel")]
 
-        u = apply_rot(hidden_states, R, self.part_io, inverse=True)
+        u = apply_rot(hidden_states, R, self.d_part, inverse=True)
+
         input_shape = u.shape[:-1]
         hidden_shape = (*input_shape, -1, base.head_dim)
-
         query_states = base.q_proj(u).view(hidden_shape).transpose(1, 2)
         key_states = base.k_proj(u).view(hidden_shape).transpose(1, 2)
         value_states = base.v_proj(u).view(hidden_shape).transpose(1, 2)
@@ -229,63 +213,53 @@ class SandwichLlamaAttention(nn.Module):
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
-        # relative transport AFTER RoPE (spec §3.3), query side: q <- M^T q
-        query_states = apply_rot_head(query_states, M, self.part_head, inverse=True)
+        # AFTER RoPE: q-side relative transport; q has the full head count even
+        # under GQA, and the KV cache below stays in the base frame.
         if gains is not None:
-            query_states = apply_gain_head(query_states, gains[(self.layer_idx, "qk_rel")],
-                                           self.part_head)
+            query_states = apply_gain_head(query_states, gains[(self.layer_idx, "qk_rel")], self.h_part)
+        query_states = apply_rot_head(query_states, M, self.h_part, inverse=True)
 
         if past_key_values is not None:
-            key_states, value_states = past_key_values.update(key_states, value_states,
-                                                              base.layer_idx)
+            key_states, value_states = past_key_values.update(key_states, value_states, base.layer_idx)
 
         attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
             base.config._attn_implementation, llama_eager_attention_forward)
-
         attn_output, attn_weights = attention_interface(
             base, query_states, key_states, value_states, attention_mask,
             dropout=0.0 if not base.training else base.attention_dropout,
             scaling=base.scaling, **kwargs)
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-        o = base.o_proj(attn_output)
+        attn_output = base.o_proj(attn_output)
 
-        out = apply_rot(o, R, self.part_io)
+        out = apply_rot(attn_output, R, self.d_part)
         if gains is not None:
-            out = apply_gain(out, gains[(self.layer_idx, "attn_io")], self.part_io)
+            out = apply_gain(out, gains[(self.layer_idx, "attn_io")], self.d_part)
         return out, attn_weights
 
 
-class SandwichLlamaMLP(nn.Module):
-    """Spec §3.2 (SwiGLU variant) around a frozen transformers LlamaMLP."""
+class SandwichLlamaMLP(_SandwichBase):
+    """Spec §3.2 (SwiGLU): rotate BOTH branches by S before the elementwise
+    ops, inverse after the product. ffn_hidden gain on the up branch only."""
 
-    def __init__(self, base, layer_idx: int, state: ProgramState, spec: FieldSpec):
-        super().__init__()
-        self.base = base
-        self.layer_idx = layer_idx
-        self.spec = spec
-        self.part_io = spec.partition("mlp_io")
-        self.part_hidden = spec.partition("ffn_hidden")
-        object.__setattr__(self, "state", state)
-
-    def forward(self, hidden_states):
-        if self.state.field is None:
-            return self.base(hidden_states)
-        base = self.base
+    def forward(self, x):
         field = self.state.field
+        if field is None:
+            return self.base(x)
+        base = self.base
         rot = field.rotations()
         gains = field.gains()
-        R = _check_device(rot[(self.layer_idx, "mlp_io")], hidden_states)
+        R = rot[(self.layer_idx, "mlp_io")]
         S = rot[(self.layer_idx, "ffn_hidden")]
 
-        u = apply_rot(hidden_states, R, self.part_io, inverse=True)
-        g = base.act_fn(apply_rot(base.gate_proj(u), S, self.part_hidden))
-        a = apply_rot(base.up_proj(u), S, self.part_hidden)
-        if gains is not None:  # gain once, on the up branch (module docstring)
-            a = apply_gain(a, gains[(self.layer_idx, "ffn_hidden")], self.part_hidden)
-        h = apply_rot(g * a, S, self.part_hidden, inverse=True)
-        y = base.down_proj(h)
-        out = apply_rot(y, R, self.part_io)
+        u = apply_rot(x, R, self.d_part, inverse=True)
+        g = base.act_fn(apply_rot(base.gate_proj(u), S, self.f_part))
+        a = apply_rot(base.up_proj(u), S, self.f_part)
         if gains is not None:
-            out = apply_gain(out, gains[(self.layer_idx, "mlp_io")], self.part_io)
-        return out
+            a = apply_gain(a, gains[(self.layer_idx, "ffn_hidden")], self.f_part)
+        h = apply_rot(g * a, S, self.f_part, inverse=True)
+        y = base.down_proj(h)
+        y = apply_rot(y, R, self.d_part)
+        if gains is not None:
+            y = apply_gain(y, gains[(self.layer_idx, "mlp_io")], self.d_part)
+        return y

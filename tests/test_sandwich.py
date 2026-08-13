@@ -228,7 +228,8 @@ def test_hidden_states_capture_with_program(tiny_gpt2, tiny_ids):
 
 
 # ---------------------------------------------------------------------------
-# qk_rel placement equivalence (kernel level): q^T (M k) == (M^T q)^T k
+# qk_rel placement equivalence (kernel level): q^T (M k) == (M^T q)^T k, and
+# with gains q^T (g ⊙ (M k)) == (M^T (g ⊙ q))^T k — the implemented form
 # ---------------------------------------------------------------------------
 def test_qk_rel_query_side_equivalence():
     g = torch.Generator().manual_seed(17)
@@ -239,6 +240,24 @@ def test_qk_rel_query_side_equivalence():
     key_side = torch.einsum('bhtd,bhsd->bhts', q, apply_rot_head(k, M, part))
     query_side = torch.einsum('bhtd,bhsd->bhts',
                               apply_rot_head(q, M, part, inverse=True), k)
+    assert (key_side - query_side).abs().max() < 1e-5
+
+
+def test_qk_rel_query_side_equivalence_with_gains():
+    from lpm.gains import apply_gain_head
+    g = torch.Generator().manual_seed(23)
+    part = make_partition(12)
+    q = torch.randn(2, 4, 9, 12, generator=g)
+    k = torch.randn(2, 4, 9, 12, generator=g)
+    M = q_to_R(q_normalize(torch.randn(4, part.n3, 4, generator=g)))
+    gain = torch.exp(0.3 * torch.randn(4, part.n3, generator=g))
+    # spec §4 placement: gain immediately after the forward rotation, k side
+    key_side = torch.einsum('bhtd,bhsd->bhts',
+                            q, apply_gain_head(apply_rot_head(k, M, part), gain, part))
+    # implemented transpose: gain on q BEFORE the inverse rotation
+    query_side = torch.einsum('bhtd,bhsd->bhts',
+                              apply_rot_head(apply_gain_head(q, gain, part), M, part,
+                                             inverse=True), k)
     assert (key_side - query_side).abs().max() < 1e-5
 
 

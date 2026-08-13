@@ -102,6 +102,51 @@ def fit_field(model: LatentProgramModel, field, behavior, vocab, device,
     return field
 
 
+def fit_fields_joint(model: LatentProgramModel, pairs, vocab, device,
+                     steps=1500, batch=64, lr=1e-3, seed=1, extra_params=(),
+                     tag=""):
+    """Fit several (field, behavior) pairs JOINTLY: one optimizer over all
+    field params plus extra_params (the shared AxisBank), one batch per
+    behavior per step, losses summed before the step.
+
+    This is the fair protocol for the abelian baseline: a sequential fit
+    (ta first, then tb) lets tb's fit move the SHARED axes out from under
+    ta's already-frozen thetas, so any ta degradation would be an artifact
+    of the protocol rather than of the abelian constraint the baseline is
+    meant to isolate. (A scaled-down probe measured only ~1.5 deg mean
+    axis drift at 200-step fits, but drift grows with fit length and the
+    falsifier must not depend on it being benign.) Joint fitting keeps
+    every theta consistent with the final shared axes, so the baseline's
+    ordered-composition score reflects commutativity alone."""
+    data = []
+    for i, (field, behavior) in enumerate(pairs):
+        ids, lab, attn = e3_examples(behavior, 4000, vocab, seed=seed + i)
+        data.append((field, ids, lab, attn))
+    params = [p for field, *_ in data for p in field.parameters()]
+    params = list(dict.fromkeys(params + list(extra_params)))
+    opt = torch.optim.AdamW(params, lr=lr, weight_decay=0.0)
+    g = torch.Generator().manual_seed(seed)
+    for step in range(steps):
+        opt.zero_grad()
+        total = 0.0
+        for field, ids, lab, attn in data:
+            idx = torch.randint(0, ids.shape[0], (batch,), generator=g)
+            with model.program(field):
+                out = model(input_ids=ids[idx].to(device),
+                            attention_mask=attn[idx].to(device),
+                            labels=lab[idx].to(device))
+            out.loss.backward()
+            total += out.loss.item()
+        torch.nn.utils.clip_grad_norm_(params, 1.0)
+        set_lr(opt, cosine_lr(step, steps, lr, warmup=50))
+        opt.step()
+        if step % 200 == 0:
+            print(f"[{tag}] step {step}/{steps} mean loss {total / len(data):.4f}")
+    for field, *_ in data:
+        field.invalidate()
+    return [field for field, *_ in data]
+
+
 @torch.no_grad()
 def ordered_accuracy(model: LatentProgramModel, field, behavior, vocab, device,
                      n=200, seed=99):
@@ -164,11 +209,12 @@ def main():
     bank = AxisBank(model.spec).to(device)
     ta = AbelianProgramField(bank).to(device)
     tb = AbelianProgramField(bank).to(device)
-    # joint fit so the shared axes serve both skills
-    ta = fit_field(model, ta, "prepend", vocab, device, steps=args.fit_steps,
-                   seed=args.seed + 3, extra_params=bank.parameters(), tag="abelian a")
-    tb = fit_field(model, tb, "reverse", vocab, device, steps=args.fit_steps,
-                   seed=args.seed + 4, extra_params=bank.parameters(), tag="abelian b")
+    # JOINT fit (one optimizer, both tasks every step): a sequential fit would
+    # let tb's updates move the shared axes out from under ta's thetas —
+    # see fit_fields_joint docstring.
+    ta, tb = fit_fields_joint(model, [(ta, "prepend"), (tb, "reverse")], vocab,
+                              device, steps=args.fit_steps, seed=args.seed + 3,
+                              extra_params=bank.parameters(), tag="abelian joint")
 
     print("=== 4. zero-shot ordered evaluation ===")
     rows = {}

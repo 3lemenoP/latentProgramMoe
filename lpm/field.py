@@ -156,6 +156,18 @@ class ProgramField(nn.Module):
         self._rot_sig = None
         self._gain_cache: Optional[Dict[SiteKey, torch.Tensor]] = None
         self._gain_sig = None
+        # load_state_dict(assign=True) REPLACES the Parameter objects inside
+        # the ParameterDicts; rebuild the site-keyed views afterwards or the
+        # forward path would keep serving the pre-load tensors.
+        self.register_load_state_dict_post_hook(lambda m, _keys: m._resync_views())
+
+    def _resync_views(self) -> None:
+        if self.trainable:
+            self._q = {(l, n): self.params_q[_pkey(l, n)] for (l, n) in self.spec.site_keys()}
+            if self._rho is not None:
+                self._rho = {(l, n): self.params_rho[_pkey(l, n)]
+                             for (l, n) in self.spec.site_keys()}
+        self.invalidate()
 
     # -- constructors --------------------------------------------------------
     @classmethod

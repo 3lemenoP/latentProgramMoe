@@ -16,8 +16,13 @@ Notes:
   so the unwrapped behavior is preserved exactly.
 - Do NOT save_pretrained the wrapped model (submodule paths shift); programs
   are the artifact that ships (ProgramField.save), the base stays pristine.
-- Generation: with a program installed on GPT-2, the KV cache holds rotated
-  keys — never swap programs mid-generation with a live cache.
+- Generation with a program works (tested: incremental decoding matches the
+  full forward under one program), but the KV cache is program-DEPENDENT —
+  cached k/v are computed under the installed field's attn_io frame and
+  upstream layers. Never swap programs mid-generation with a live cache.
+- output_attentions=True returns no attentions while a program is installed:
+  transformers v5 records them from the base attention class, whose forward
+  the sandwich path does not call. hidden_states capture works (tested).
 """
 from __future__ import annotations
 
@@ -107,6 +112,15 @@ class LatentProgramModel(nn.Module):
     @property
     def active_program(self) -> Optional[ProgramField]:
         return self.state.field
+
+    def train(self, mode: bool = True):
+        """Keep the frozen base in eval mode no matter what: guarantee 1
+        (identity program == base) and deterministic distillation both need
+        base dropout off, and there is nothing trainable inside the wrapper.
+        Field/encoder modules live outside and manage their own modes."""
+        super().train(mode)
+        self.base.eval()
+        return self
 
     # -- passthroughs -----------------------------------------------------------
     def forward(self, *args, **kwargs):

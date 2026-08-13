@@ -202,8 +202,9 @@ def refine(model, field: ProgramField, input_ids: torch.Tensor,
            steps: int = 0, lr: float = 1e-3) -> ProgramField:
     """Adam on the raw field params against the demo loss, starting from the
     encoder's output. Default steps=0 (off) for eval parity; E4 sweeps {0, 50}.
-    Returns a trainable ProgramField (a detached copy of `field`)."""
-    f = field if (field.trainable and steps > 0) else field.detached(trainable=True)
+    Returns a trainable ProgramField (a detached copy of `field`) — the input
+    field is never mutated, so oracle-vs-refined comparisons stay valid."""
+    f = field.detached(trainable=True)
     if steps == 0:
         return f
     f.to(input_ids.device)

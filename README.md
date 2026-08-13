@@ -156,14 +156,27 @@ python scripts/eval_encoder.py --config configs/e4_encoder.yaml \
 - **transformers v5** (≥5.x) module interfaces; base loaded fp32 +
   `attn_implementation="eager"` by default. T4/T5 assert parity with the
   unwrapped base, so interface drift fails loudly.
-- **qk_rel placement**: GPT-2 uses the spec-literal `k ← M k`; Llama-family
-  applies the identical bilinear form on the query side (`q ← Mᵀ q` after
-  RoPE) — GQA-safe and keeps the KV cache program-independent. Kernel-level
-  equivalence is tested.
-- **Generation with a program on GPT-2**: the KV cache holds rotated keys — do
-  not swap programs mid-generation with a live cache.
+- **qk_rel placement**: the spec writes the relative transport as `k ← M k`
+  inside the logits; both adapters implement the numerically identical
+  query-side form `q ← Mᵀ q` (after RoPE where the base has RoPE), with gains
+  as `q ← Mᵀ(g ⊙ q)`. Why q-side: the qk_rel rotation never enters the KV
+  cache, and under GQA the per-attention-head field applies to q, which always
+  has the full head count. Equivalence `qᵀ(g ⊙ Mk) = (Mᵀ(g ⊙ q))ᵀk` is tested
+  at the kernel level (`test_qk_rel_query_side_equivalence`). The cache
+  remains program-dependent through `attn_io` and upstream layers — never
+  swap programs mid-generation with a live cache.
+- **`output_attentions` limitation**: with a program installed, returned
+  attentions are empty (transformers v5 records them from the base attention
+  class, which the sandwich path bypasses); `output_hidden_states` works and
+  is tested.
 - **SwiGLU gains**: the `ffn_hidden` gain applies once, on the up branch, so
   the gated product carries the gain exactly once (spec §4 is single-branch).
+- **E3 abelian baseline protocol**: the two theta-fields and the shared
+  `AxisBank` are fitted JOINTLY (`fit_fields_joint`), never sequentially — a
+  second sequential fit would move the shared axes out from under the first
+  field's frozen thetas, contaminating the baseline with a protocol artifact.
+  (A reduced-scale probe measured only ~1.5° mean axis drift, but the
+  falsifier must not depend on drift staying benign at full fit length.)
 - Do not `save_pretrained` a wrapped model; programs (`ProgramField.save`) are
   the artifact that ships. The base stays pristine.
 - v2 backlog (spec §12): per-token fields/gauge transport, path-ordered
