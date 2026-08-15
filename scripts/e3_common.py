@@ -94,9 +94,12 @@ def train_base(model, vocab, device, steps=3000, batch=64, lr=3e-4, seed=0,
 
 def fit_field(model: LatentProgramModel, field, behavior, vocab, device,
               steps=1500, batch=64, lr=1e-3, seed=1, extra_params=(), tag="",
-              overlap_with=None, overlap_coef=0.0, freeze_sites=()):
+              overlap_with=None, overlap_coef=0.0, freeze_sites=(),
+              lr_mults=None):
     """freeze_sites: site-group names pinned to exact identity and excluded
-    from optimization (B3 conjugation-only condition freezes 'rope_ax')."""
+    from optimization (B3 conjugation-only condition freezes 'rope_ax').
+    lr_mults: {site-group name: multiplier} — counteracts lazy gradient
+    routing through high-leverage sites (B3 rope_ax arm)."""
     ids, lab, attn = e3_examples(behavior, 4000, vocab, seed=seed)
     if freeze_sites:
         with torch.no_grad():
@@ -112,7 +115,17 @@ def fit_field(model: LatentProgramModel, field, behavior, vocab, device,
     else:
         field_params = list(field.parameters())
     params = list(dict.fromkeys(field_params + list(extra_params)))
-    opt = torch.optim.AdamW(params, lr=lr, weight_decay=0.0)
+    if lr_mults:
+        site_of = {id(field.q(l, n)): n for (l, n) in field.spec.site_keys()}
+        by_mult = {}
+        for p in params:
+            m = float(lr_mults.get(site_of.get(id(p)), 1.0))
+            by_mult.setdefault(m, []).append(p)
+        opt = torch.optim.AdamW(
+            [{"params": ps, "lr": lr * m, "lr_mult": m}
+             for m, ps in by_mult.items()], lr=lr, weight_decay=0.0)
+    else:
+        opt = torch.optim.AdamW(params, lr=lr, weight_decay=0.0)
     g = torch.Generator().manual_seed(seed)
     from lpm.quaternion import q_angle2, q_normalize
     for step in range(steps):

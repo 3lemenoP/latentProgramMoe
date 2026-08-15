@@ -36,15 +36,26 @@ rerun reproduced the table (same seeds) and completed the probe. Final.)*
    clean "flat conjugation control"; the clean flat controls are
    ffn_hidden/attn_io, and they behave as predicted.
 
-## Regime structure (the more interesting read)
+## Regime structure (the real result)
 
-Conjugation leverage *decays or saturates* with strength (qk_rel L: 80→47),
-while axis leverage *rises* (3.4→5.7 crossing s̄): the axis field is the only
-site group whose effect compounds with both strength and distance. It buys
-little raw KL per activity — but what it buys is qualitatively different:
-position-structured displacement rather than uniform perturbation. The
-headline plot (per-position KL curves) is in `runs/b2/report_b2.json`
-(`curves`), late/early ratios above.
+Conjugation fields are **saturating small-signal actuators**: leverage
+decays with strength (qk_rel L 80→47). The axis field is a **compounding
+structural actuator**: the only type whose leverage rises with strength
+(3.4→5.7) *and* whose position-coupling grows with strength (1.12→3.38).
+That second derivative discriminates even between the two position-coupled
+types: qk_rel's coupling decays with s̄ (incidental absolute-position
+interference, saturating), rope_ax's grows (structural relative-distance
+lever). And flat ffn_hidden kills the boring explanation for late-position
+KL growth — plain causal accumulation would inflate every field type's
+late/early ratio, so rope_ax's growth is genuinely positional.
+
+The weak-s̄ attention-vs-output discrepancy (far/near 0.65 in attention,
+late/early 1.74 in KL) says the lever is mediated downstream at low
+amplitude. **Discriminating follow-up (pre-registered):** a
+low-frequency-only axis probe — restrict the field to the 3-blocks touching
+the slow rotary pairs; if the lever is structural, per-pair distance growth
+should surface in attention displacement itself, not just output KL.
+Headline curves: `runs/b2/report_b2.json` (`curves`).
 
 ## Attention-displacement probe (s̄=0.01, rope_ax vs qk_rel)
 

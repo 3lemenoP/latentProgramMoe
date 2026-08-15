@@ -33,8 +33,10 @@ def cosine_lr(step: int, total: int, lr: float, warmup: int = 0,
 
 
 def set_lr(optimizer: torch.optim.Optimizer, lr: float) -> None:
+    """Respects an optional per-group 'lr_mult' (site-group lr multipliers,
+    e.g. B3's rope_ax arm — the schedule scales, the ratio persists)."""
     for g in optimizer.param_groups:
-        g["lr"] = lr
+        g["lr"] = lr * g.get("lr_mult", 1.0)
 
 
 def batched(seq: Sequence, size: int) -> Iterator[List]:
