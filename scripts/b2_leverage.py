@@ -89,37 +89,51 @@ def kl_curve_for_field(model, field, batches, device):
 
 
 @torch.no_grad()
-def attention_displacement(model, field, batches, device, max_batches=2):
-    """Mean |Δattention| binned by relative distance, program vs base."""
+def attention_displacement(model, field, batches, device, n_seq=2):
+    """Mean |Δattention| binned by relative distance, program vs base.
+    Captures stream to CPU fp16 immediately (24 layers of 512×512 maps OOM a
+    T4 if kept on-device). Also returns the base attention per bin so the
+    displacement can be normalized (raw attention decays with distance)."""
     layers = model.base.gpt_neox.layers
     captured = {}
 
     def hook(_m, _i, out):
-        captured.setdefault("attn", []).append(out[1].detach())
+        captured.setdefault("attn", []).append(
+            out[1].detach().to("cpu", torch.float16))
 
-    handles = [l.attention.register_forward_hook(hook) for l in layers]
-    T = batches[0].shape[1]
+    ids = batches[0][:n_seq]
+    T = ids.shape[1]
     bins = torch.zeros(T)
+    base_bins = torch.zeros(T)
     norm = torch.zeros(T)
-    try:
-        for ids in batches[:max_batches]:
-            captured.clear()
-            model(input_ids=ids, output_attentions=True)
-            base_attn = [a.clone() for a in captured["attn"]]
-            captured.clear()
-            with model.program(field):
+
+    def run_pass(program):
+        captured.clear()
+        handles = [l.attention.register_forward_hook(hook) for l in layers]
+        try:
+            if program is None:
                 model(input_ids=ids, output_attentions=True)
-            prog_attn = captured["attn"]
-            for ab, ap in zip(base_attn, prog_attn):
-                d = (ap.float() - ab.float()).abs()   # (B, H, T, T)
-                for delta in range(T):
-                    diag = torch.diagonal(d, offset=-delta, dim1=-2, dim2=-1)
-                    bins[delta] += diag.sum().cpu()
-                    norm[delta] += diag.numel()
-    finally:
-        for h in handles:
-            h.remove()
-    return (bins / norm.clamp_min(1)).tolist()
+            else:
+                with model.program(program):
+                    model(input_ids=ids, output_attentions=True)
+        finally:
+            for h in handles:
+                h.remove()
+        return list(captured["attn"])
+
+    base_attn = run_pass(None)
+    prog_attn = run_pass(field)
+    for ab, ap in zip(base_attn, prog_attn):
+        d = (ap.float() - ab.float()).abs()   # (B, H, T, T) on CPU
+        b = ab.float()
+        for delta in range(T):
+            diag = torch.diagonal(d, offset=-delta, dim1=-2, dim2=-1)
+            bins[delta] += diag.sum()
+            base_bins[delta] += torch.diagonal(
+                b, offset=-delta, dim1=-2, dim2=-1).sum()
+            norm[delta] += diag.numel()
+    n = norm.clamp_min(1)
+    return (bins / n).tolist(), (base_bins / n).tolist()
 
 
 def main():
@@ -162,15 +176,24 @@ def main():
             print(f"{ftype:11s} s̄={sbar:<6} KL={mean_kl:.5f}  L={mean_kl/sbar:8.3f}  "
                   f"early64={early:.5f} late64={late:.5f} late/early={late/max(early,1e-9):.2f}")
 
+    # KL table is the headline — persist before the (memory-hungrier) probe
+    (out / "report_b2.json").write_text(json.dumps(report, indent=2))
+    print(f"wrote {out / 'report_b2.json'} (KL table)")
+
     print("\nattention-displacement probe at s̄=0.01 (rope_ax vs qk_rel)")
     for ftype in ("rope_ax", "qk_rel"):
         field = make_single_type_field(model.spec, ftype, 0.01,
                                        seed=args.seed + hash((ftype, 0.01)) % 10000).to(device)
-        disp = attention_displacement(model, field, batches, device)
+        disp, base_disp = attention_displacement(model, field, batches, device)
         report[f"attn_disp_{ftype}"] = [round(v, 8) for v in disp]
+        report[f"attn_base_{ftype}"] = [round(v, 8) for v in base_disp]
         d = torch.tensor(disp)
+        b = torch.tensor(base_disp)
+        rel = d / b.clamp_min(1e-8)          # displacement relative to base attn
         print(f"{ftype:11s} |Δattn| near(1-16)={d[1:17].mean():.6f} "
-              f"far(128-511)={d[128:].mean():.6f} ratio={d[128:].mean()/max(d[1:17].mean(),1e-12):.2f}")
+              f"far(128-511)={d[128:].mean():.6f}  "
+              f"RELATIVE near={rel[1:17].mean():.4f} far={rel[128:].mean():.4f} "
+              f"rel-ratio={rel[128:].mean()/max(rel[1:17].mean(),1e-9):.2f}")
 
     (out / "report_b2.json").write_text(json.dumps(report, indent=2))
     print(f"wrote {out / 'report_b2.json'}")
