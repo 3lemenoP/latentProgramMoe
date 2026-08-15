@@ -158,6 +158,10 @@ python scripts/eval_encoder.py --config configs/e4_encoder.yaml \
   overall median ratio **0.028** (per-task medians 0.024–0.033) against the
   spec threshold 0.3. Decision: **gains OFF** — recorded in
   `configs/base.yaml`. Report: [`docs/reports/e0-mirsky.md`](docs/reports/e0-mirsky.md).
+- **E1 (2026-08-15)**: phase-1 fits recovered **85% / 84% / 100% / 96%**
+  of the expert–base CE gap on french / caps / jsonish / sentiment
+  (gains off). Random-orthogonal controls all largely *negative*.
+  Report: [`docs/reports/e1-experts.md`](docs/reports/e1-experts.md).
 - **transformers v5** (≥5.x) module interfaces; base loaded fp32 +
   `attn_implementation="eager"` by default. T4/T5 assert parity with the
   unwrapped base, so interface drift fails loudly.
