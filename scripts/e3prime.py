@@ -167,6 +167,116 @@ def stage_decode(args, model, vocab, device, d: Path):
     print(json.dumps(out, indent=2))
 
 
+def _fit_tracked(model, field, behavior, vocab, device, steps, seed, tag,
+                 lr=1e-3, eval_every=250, eval_n=50, target=0.9):
+    """fit_field with periodic exact-accuracy evals; returns (field, history,
+    steps_to_target). Converts P2's capacity question into a fine-tune-distance
+    metric (handoff §4 P2)."""
+    from lpm.tasks import e3_examples
+    from lpm.utils import cosine_lr, set_lr
+    ids, lab, attn = e3_examples(behavior, 4000, vocab, seed=seed)
+    params = list(field.parameters())
+    opt = torch.optim.AdamW(params, lr=lr, weight_decay=0.0)
+    g = torch.Generator().manual_seed(seed)
+    history, hit = [], None
+    for step in range(steps):
+        if step % eval_every == 0:
+            field.invalidate()
+            e = ordered_accuracy(model, field, behavior, vocab, device, n=eval_n)[0]
+            history.append({"step": step, "exact": e})
+            print(f"[{tag}] step {step} exact {e:.3f}")
+            if hit is None and e >= target:
+                hit = step
+        idx = torch.randint(0, ids.shape[0], (64,), generator=g)
+        with model.program(field):
+            out = model(input_ids=ids[idx].to(device),
+                        attention_mask=attn[idx].to(device),
+                        labels=lab[idx].to(device))
+        opt.zero_grad()
+        out.loss.backward()
+        torch.nn.utils.clip_grad_norm_(params, 1.0)
+        set_lr(opt, cosine_lr(step, steps, lr, warmup=50))
+        opt.step()
+    field.invalidate()
+    e = ordered_accuracy(model, field, behavior, vocab, device, n=eval_n)[0]
+    history.append({"step": steps, "exact": e})
+    if hit is None and e >= target:
+        hit = steps
+    print(f"[{tag}] final exact {e:.3f}  steps_to_{target} = {hit}")
+    return field, history, hit
+
+
+def _warm_start_from(f: ProgramField, spec, device) -> ProgramField:
+    return ProgramField(spec, {k: f.q(*k).detach().float().clone()
+                               for k in spec.site_keys()},
+                        trainable=True).to(device)
+
+
+def stage_p2(args, model, vocab, device, d: Path):
+    """P2 — z_ba disambiguation (handoff §4 P2): warm starts {id, hamilton,
+    z_b} with steps-to-0.9-exact, the z_ab-from-hamilton falsifier leg, and
+    the overfit-32 capacity check."""
+    za = ProgramField.load(str(d / "z_a.pt"), trainable=False).to(device)
+    zb = ProgramField.load(str(d / "z_b.pt"), trainable=False).to(device)
+    spec = model.spec
+    report = {}
+
+    # z_ba: apply b first then a => algebraic guess hamilton(z_a, z_b) = compose(za, zb)
+    inits = {
+        "identity": ProgramField.randn_near_identity(spec, sigma=1e-3, trainable=True).to(device),
+        "hamilton(a,b)": _warm_start_from(compose(za, zb), spec, device),
+        "z_b": _warm_start_from(zb, spec, device),
+    }
+    for name, f in inits.items():
+        _, hist, hit = _fit_tracked(model, f, "b_then_a", vocab, device,
+                                    steps=args.fit_steps, seed=args.seed + 40,
+                                    tag=f"z_ba<-{name}")
+        report[f"z_ba from {name}"] = {"steps_to_0.9": hit, "history": hist}
+
+    # falsifier leg (handoff §4 P1): does the hamilton(b,a) init help z_ab?
+    for name, f in (("identity", ProgramField.randn_near_identity(
+                        spec, sigma=1e-3, trainable=True).to(device)),
+                    ("hamilton(b,a)", _warm_start_from(compose(zb, za), spec, device))):
+        _, hist, hit = _fit_tracked(model, f, "a_then_b", vocab, device,
+                                    steps=args.fit_steps, seed=args.seed + 41,
+                                    tag=f"z_ab<-{name}")
+        report[f"z_ab from {name}"] = {"steps_to_0.9": hit, "history": hist}
+
+    # overfit-32 capacity check: memorize 32 fixed b_then_a examples
+    from lpm.tasks import e3_examples
+    from lpm.utils import cosine_lr, set_lr
+    ids, lab, attn = e3_examples("b_then_a", 32, vocab, seed=123)
+    ids, lab, attn = ids.to(device), lab.to(device), attn.to(device)
+    f32 = ProgramField.randn_near_identity(spec, sigma=1e-3, trainable=True).to(device)
+    params = list(f32.parameters())
+    opt = torch.optim.AdamW(params, lr=1e-3, weight_decay=0.0)
+    for step in range(args.fit_steps):
+        with model.program(f32):
+            out = model(input_ids=ids, attention_mask=attn, labels=lab)
+        opt.zero_grad()
+        out.loss.backward()
+        torch.nn.utils.clip_grad_norm_(params, 1.0)
+        set_lr(opt, cosine_lr(step, args.fit_steps, 1e-3, warmup=50))
+        opt.step()
+        if step % 500 == 0:
+            print(f"[overfit32] step {step} loss {out.loss.item():.4f}")
+    f32.invalidate()
+    with torch.no_grad(), model.program(f32):
+        logits = model(input_ids=ids, attention_mask=attn).logits
+    mask = lab != -100
+    correct = ((logits.argmax(-1)[..., :-1] == lab[..., 1:]) | ~mask[..., 1:])
+    seq_exact = correct.all(dim=-1).float().mean().item()
+    report["overfit_32"] = {"final_loss": out.loss.item(),
+                            "teacher_forced_seq_exact": seq_exact}
+    print(f"[overfit32] final loss {out.loss.item():.4f} "
+          f"tf-seq-exact {seq_exact:.3f}")
+
+    (d / "report_p2.json").write_text(json.dumps(report, indent=2))
+    print(json.dumps({k: (v if k == "overfit_32" else
+                          {"steps_to_0.9": v["steps_to_0.9"]})
+                      for k, v in report.items()}, indent=2))
+
+
 def stage_d3(args, model, vocab, device, d: Path):
     print("=== D3 relative increments / transport ===")
     # include append in the frozen base? the saved base was trained without
@@ -277,7 +387,7 @@ def stage_d5(args, model, vocab, device, d: Path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True,
-                    choices=["d2", "d3", "d4", "d5", "decode"])
+                    choices=["d2", "d3", "d4", "d5", "decode", "p2"])
     ap.add_argument("--dir", default="runs/e3")
     ap.add_argument("--fit-steps", type=int, default=1500)
     ap.add_argument("--overlap", type=float, default=0.05,
@@ -293,7 +403,7 @@ def main():
     vocab = E3Vocab()
     model = _load_wrap(d, device)
     {"d2": stage_d2, "d3": stage_d3, "d4": stage_d4, "d5": stage_d5,
-     "decode": stage_decode}[args.stage](args, model, vocab, device, d)
+     "decode": stage_decode, "p2": stage_p2}[args.stage](args, model, vocab, device, d)
 
 
 if __name__ == "__main__":
