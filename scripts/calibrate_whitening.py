@@ -87,47 +87,58 @@ def main():
         batches.append((ids.to(device), attn.to(device)))
 
     sizes = group_sizes(spec)
-    leverage, table = {}, []
-    for ftype in spec.site_names():
-        Ls = []
-        for sbar in args.sbars:
-            f = single_type_field(spec, ftype, sbar,
-                                  seed=args.seed + hash((ftype, sbar)) % 9973).to(device)
-            kl = kl_to_base(model, f, batches)
-            Ls.append(kl / sbar)
-            table.append({"group": ftype, "sbar": sbar, "kl": kl, "L": kl / sbar})
-            print(f"{ftype:11s} s̄={sbar:<5} KL={kl:.5f}  L={kl / sbar:.3f}")
-        leverage[ftype] = sum(Ls) / len(Ls)
+    table = []
 
+    def measure_L(ftype, sbar, salt=0):
+        f = single_type_field(spec, ftype, sbar,
+                              seed=args.seed + salt + hash((ftype, round(sbar, 6))) % 9973
+                              ).to(device)
+        kl = kl_to_base(model, f, batches)
+        table.append({"group": ftype, "sbar": sbar, "kl": kl, "L": kl / sbar})
+        print(f"{ftype:11s} s̄={sbar:<8.5f} KL={kl:.6f}  L={kl / sbar:.3f}")
+        return kl / sbar
+
+    # pass 1: seed leverage at the requested s̄ grid
+    leverage = {ftype: sum(measure_L(ftype, s) for s in args.sbars) / len(args.sbars)
+                for ftype in spec.site_names()}
     wh = Whitening(spec, leverage,
                    meta={"base": args.base, "sbars": args.sbars,
                          "n_probe": args.n_probe, "seed": args.seed})
 
-    # ---- T18 gate: equal whitened norm ⇒ KL within ×2 across groups --------
-    def gate(rho):
+    def sbar_at(rho, c):
+        theta = min(rho / c, 3.0)
+        return max(float(torch.sin(torch.tensor(theta / 2.0)) ** 2), 1e-5)
+
+    def gate(rho, w):
         kls = {}
         for ftype in spec.site_names():
-            # whitened per-site norm rho ⇒ raw angle θ = rho / c_g,
-            # s̄ = sin²(θ/2)
-            theta = rho / wh.c[ftype]
-            sbar = float(torch.sin(torch.tensor(theta / 2.0)) ** 2)
+            sbar = sbar_at(rho, w.c[ftype])
             f = single_type_field(spec, ftype, sbar,
                                   seed=args.seed + 31 + hash(ftype) % 997).to(device)
             kls[ftype] = kl_to_base(model, f, batches)
         vals = list(kls.values())
-        ratio = max(vals) / max(min(vals), 1e-12)
-        return kls, ratio
+        return kls, max(vals) / max(min(vals), 1e-12)
 
-    rho = args.rho
-    kls, ratio = gate(rho)
-    passed = ratio <= 2.0
-    if not passed:
+    # KL response is superlinear for some groups on some bases (measured:
+    # toy ffn_hidden/qk_rel) — a single small-s̄ L_g misprices other
+    # strengths. Anchor the calibration AT the operating strength: re-measure
+    # L_g at the s̄ each group hits at gate ρ, rebuild c, re-gate; halve ρ on
+    # failure (spec §3 step 2 escalation).
+    rho, passed, kls, ratio = args.rho, False, {}, float("inf")
+    for attempt in range(4):
+        for _ in range(2):  # self-consistency iterations at this rho
+            lev2 = {ftype: measure_L(ftype, sbar_at(rho, wh.c[ftype]), salt=53)
+                    for ftype in spec.site_names()}
+            wh = Whitening(spec, lev2, meta=wh.meta)
+        kls, ratio = gate(rho, wh)
+        passed = ratio <= 2.0
+        print(f"T18 gate @rho={rho}: "
+              f"{json.dumps({k: round(v, 6) for k, v in kls.items()})} "
+              f"max/min={ratio:.2f} pass={passed}")
+        if passed:
+            break
         rho = rho / 2.0
-        kls2, ratio2 = gate(rho)
-        if ratio2 <= 2.0:
-            kls, ratio, passed = kls2, ratio2, True
-    print(f"T18 gate @rho={rho}: KLs {json.dumps({k: round(v, 5) for k, v in kls.items()})} "
-          f"max/min={ratio:.2f} pass={passed}")
+    leverage = wh.leverage
 
     wh.meta.update({"t18_rho": rho, "t18_ratio": ratio, "t18_pass": passed,
                     "t18_kls": kls})
