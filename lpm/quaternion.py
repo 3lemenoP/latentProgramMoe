@@ -21,6 +21,7 @@ import torch
 __all__ = [
     "q_normalize", "q_to_R", "hamilton", "d2_chord", "slerp",
     "q_conjugate", "q_angle2", "q_commutator", "d_geo", "q_pow",
+    "q_log", "q_exp",
     "Partition", "make_partition", "apply_rot", "apply_rot_head",
 ]
 
@@ -94,6 +95,32 @@ def q_pow(q: torch.Tensor, lam, eps: float = 1e-8) -> torch.Tensor:
     ident = torch.zeros_like(q)
     ident[..., 0] = 1.0
     return torch.where((vn < eps).unsqueeze(-1), ident, out)
+
+
+def q_log(q: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Rotation-vector log map (..., 4) -> (..., 3): v = θ·n̂ with
+    θ = 2·atan2(‖vec‖, w) AFTER w ≥ 0 canonicalization (sign-invariance:
+    log(−q) = log(q); log(identity) = 0). Phase-4 spec §1, test T19."""
+    q = torch.where(q[..., :1] < 0, -q, q)
+    w, v = q[..., 0], q[..., 1:]
+    vn = v.norm(dim=-1)
+    theta = 2.0 * torch.atan2(vn, w)                    # in [0, pi]
+    scale = theta / vn.clamp_min(eps)
+    out = scale.unsqueeze(-1) * v
+    return torch.where((vn < eps).unsqueeze(-1), torch.zeros_like(v), out)
+
+
+def q_exp(v: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Rotation-vector exp map (..., 3) -> unit quaternion (..., 4):
+    q = (cos(‖v‖/2), sin(‖v‖/2)·v̂); identity at v = 0."""
+    theta = v.norm(dim=-1)
+    half = 0.5 * theta
+    nhat = v / theta.clamp_min(eps).unsqueeze(-1)
+    out = torch.cat([torch.cos(half).unsqueeze(-1),
+                     torch.sin(half).unsqueeze(-1) * nhat], dim=-1)
+    ident = torch.zeros(*v.shape[:-1], 4, dtype=v.dtype, device=v.device)
+    ident[..., 0] = 1.0
+    return torch.where((theta < eps).unsqueeze(-1), ident, out)
 
 
 def d_geo(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
