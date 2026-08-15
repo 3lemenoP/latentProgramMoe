@@ -53,10 +53,38 @@ def program_ce(model: LatentProgramModel, field, blocks, device):
 
 
 def fit(model: LatentProgramModel, teacher, blocks, cfg: LPMConfig, device,
-        field: ProgramField, tag: str):
-    opt = torch.optim.AdamW(field.parameters(), lr=cfg.optimizer.lr,
-                            betas=cfg.optimizer.betas,
-                            weight_decay=cfg.optimizer.weight_decay)
+        field: ProgramField, tag: str, freeze_sites=(), lr_mults=None):
+    """freeze_sites: site groups pinned to identity and excluded from the
+    optimizer (B4 'without axis' arm freezes rope_ax). lr_mults: per-group
+    lr multipliers (B3 showed naive joint fits under-use rope_ax)."""
+    if freeze_sites:
+        with torch.no_grad():
+            for (l, n) in field.spec.site_keys():
+                if n in freeze_sites:
+                    q = field.q(l, n)
+                    q.zero_()
+                    q[..., 0] = 1.0
+        field.invalidate()
+        frozen = {id(field.q(l, n)) for (l, n) in field.spec.site_keys()
+                  if n in freeze_sites}
+        params = [p for p in field.parameters() if id(p) not in frozen]
+    else:
+        params = list(field.parameters())
+    if lr_mults:
+        site_of = {id(field.q(l, n)): n for (l, n) in field.spec.site_keys()}
+        by_mult = {}
+        for p in params:
+            m = float(lr_mults.get(site_of.get(id(p)), 1.0))
+            by_mult.setdefault(m, []).append(p)
+        opt = torch.optim.AdamW(
+            [{"params": ps, "lr": cfg.optimizer.lr * m, "lr_mult": m}
+             for m, ps in by_mult.items()],
+            lr=cfg.optimizer.lr, betas=cfg.optimizer.betas,
+            weight_decay=cfg.optimizer.weight_decay)
+    else:
+        opt = torch.optim.AdamW(params, lr=cfg.optimizer.lr,
+                                betas=cfg.optimizer.betas,
+                                weight_decay=cfg.optimizer.weight_decay)
     steps = cfg.optimizer.steps
     step = 0
     while step < steps:
@@ -72,7 +100,7 @@ def fit(model: LatentProgramModel, teacher, blocks, cfg: LPMConfig, device,
             loss, kl, h_mse, reg = distill_loss(p_out, t_out, cfg, field)
             opt.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(field.parameters(), cfg.optimizer.grad_clip)
+            torch.nn.utils.clip_grad_norm_(params, cfg.optimizer.grad_clip)
             set_lr(opt, cosine_lr(step, steps, cfg.optimizer.lr,
                                   warmup=cfg.optimizer.warmup_steps))
             opt.step()
@@ -94,6 +122,12 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--control", action="store_true",
                     help="also fit from a random-orthogonal init (E1 control)")
+    ap.add_argument("--freeze-sites", nargs="*", default=[],
+                    help="site groups pinned to identity (B4: rope_ax)")
+    ap.add_argument("--rope-lr-mult", type=float, default=1.0,
+                    help="lr multiplier on rope_ax (B4 anti-lazy-routing arm)")
+    ap.add_argument("--tag", default="",
+                    help="suffix for output files, e.g. 'conj_only'")
     args = ap.parse_args()
 
     cfg = LPMConfig.from_yaml(args.config)
@@ -121,19 +155,36 @@ def main():
     ce_base = lm_cross_entropy(model, eval_blocks, device=device)
     ce_expert = lm_cross_entropy(teacher, eval_blocks, device=device)
 
+    suffix = f"_{args.tag}" if args.tag else ""
+    lr_mults = ({"rope_ax": args.rope_lr_mult}
+                if args.rope_lr_mult != 1.0 else None)
     field = ProgramField.randn_near_identity(
         model.spec, sigma=cfg.field_init_sigma,
         enable_gains=cfg.enable_gains, trainable=True).to(device)
-    field = fit(model, teacher, train_blocks, cfg, device, field, args.task)
-    field.save(str(out_dir / f"z_{args.task}.pt"))
+    field = fit(model, teacher, train_blocks, cfg, device, field,
+                f"{args.task}{suffix}", freeze_sites=tuple(args.freeze_sites),
+                lr_mults=lr_mults)
+    field.save(str(out_dir / f"z_{args.task}{suffix}.pt"))
+
+    # where does the skill land? mean activity per site group (B4 question)
+    from collections import defaultdict
+    from lpm.quaternion import q_angle2, q_normalize
+    acts = defaultdict(list)
+    for (l, n) in model.spec.site_keys():
+        acts[n].append(
+            q_angle2(q_normalize(field.q(l, n).detach().float())).mean().item())
+    group_activity = {n: sum(v) / len(v) for n, v in acts.items()}
 
     ce_prog = program_ce(model, field, eval_blocks, device)
     gap = ce_base - ce_expert
     report = {
-        "task": args.task, "base_model": cfg.base_model,
+        "task": args.task, "base_model": cfg.base_model, "tag": args.tag,
         "enable_gains": cfg.enable_gains,
+        "freeze_sites": list(args.freeze_sites),
+        "rope_lr_mult": args.rope_lr_mult,
         "ce_base": ce_base, "ce_expert": ce_expert, "ce_program": ce_prog,
         "gap_recovered": (ce_base - ce_prog) / gap if abs(gap) > 1e-9 else float("nan"),
+        "group_activity": group_activity,
     }
 
     if args.control:
@@ -147,7 +198,7 @@ def main():
         report["control_gap_recovered"] = ((ce_base - ce_ctrl) / gap
                                            if abs(gap) > 1e-9 else float("nan"))
 
-    (out_dir / f"report_{args.task}.json").write_text(json.dumps(report, indent=2))
+    (out_dir / f"report_{args.task}{suffix}.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 
 

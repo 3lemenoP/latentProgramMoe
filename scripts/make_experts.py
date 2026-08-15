@@ -43,9 +43,13 @@ def train_expert(args, task, device):
     base.eval()
     ce_base = lm_cross_entropy(base, eval_blocks, device=device)
 
+    if base.config.model_type == "gpt_neox":  # Pythia (B4)
+        targets = ["query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"]
+    else:  # GPT-2
+        targets = ["c_attn", "c_proj", "c_fc"]
     lora = LoraConfig(r=args.lora_r, lora_alpha=2 * args.lora_r,
                       lora_dropout=0.0, bias="none", task_type="CAUSAL_LM",
-                      target_modules=["c_attn", "c_proj", "c_fc"])
+                      target_modules=targets)
     model = get_peft_model(base, lora)
     model.train()
     opt = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad),
