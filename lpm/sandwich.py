@@ -78,6 +78,7 @@ class _SandwichBase(nn.Module):
         self.d_part = spec.partition("attn_io")   # == mlp_io partition (d_model)
         self.f_part = spec.partition("ffn_hidden")
         self.h_part = spec.partition("qk_rel")
+        self.ax_part = (spec.partition("rope_ax") if spec.rotary_ndims > 0 else None)
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +175,121 @@ class SandwichGPT2MLP(_SandwichBase):
         if gains is not None:
             y = apply_gain(y, gains[(self.layer_idx, "mlp_io")], self.d_part)
         return base.dropout(y)
+
+
+# ---------------------------------------------------------------------------
+# GPT-NeoX / Pythia (partial rotary + parallel residual)
+# ---------------------------------------------------------------------------
+class SandwichNeoXAttention(_SandwichBase):
+    """Steering doc B0 around transformers v5 GPTNeoXAttention.
+
+    u    = R^T x                              (attn_io, module frame)
+    qkv  = query_key_value(u), chunk to heads
+    axis conjugation of the rotary generators (rope_ax; Ω → A Ω Aᵀ done as a
+    sandwich around the base rotary call, Ω itself untouched):
+        q[..., :nd] ← A · RoPE_m( Aᵀ · q[..., :nd] ),  SAME A on k (mandatory:
+        different rotations on q/k would break positional relativity)
+    q    = M^T q                              (qk_rel post-RoPE, q-side —
+                                               retained as the static control)
+    attn = base interface; dense; out = R o   (exit to residual frame)
+
+    Correctness runs must use eager attention (rotary monkeypatch is
+    sdpa/flash-version-sensitive) — enforced by from_pretrained defaults.
+    """
+
+    def forward(self, hidden_states, attention_mask=None, layer_past=None,
+                position_embeddings=None, **kwargs):
+        field = self.state.field
+        if field is None:
+            return self.base(hidden_states, attention_mask=attention_mask,
+                             layer_past=layer_past,
+                             position_embeddings=position_embeddings, **kwargs)
+        base = self.base
+        from transformers.models.gpt_neox.modeling_gpt_neox import (
+            apply_rotary_pos_emb,
+            eager_attention_forward as neox_eager_attention_forward,
+        )
+
+        rot = field.rotations()
+        gains = field.gains()
+        R = rot[(self.layer_idx, "attn_io")]
+        M = rot[(self.layer_idx, "qk_rel")]
+        A = rot.get((self.layer_idx, "rope_ax"))
+
+        u = apply_rot(hidden_states, R, self.d_part, inverse=True)
+
+        input_shape = u.shape[:-1]
+        hidden_shape = (*input_shape, -1, 3 * base.head_size)
+        qkv = base.query_key_value(u).view(hidden_shape).transpose(1, 2)
+        query_states, key_states, value_states = qkv.chunk(3, dim=-1)
+
+        cos, sin = position_embeddings
+        if A is not None:
+            nd = self.spec.rotary_ndims
+            q_rot = apply_rot_head(query_states[..., :nd], A, self.ax_part, inverse=True)
+            k_rot = apply_rot_head(key_states[..., :nd], A, self.ax_part, inverse=True)
+            q_rot, k_rot = apply_rotary_pos_emb(q_rot, k_rot, cos, sin)
+            # apply_rotary_pos_emb only rotates cos.shape[-1] dims; q_rot/k_rot
+            # are exactly those dims here, pass-through dims stay outside
+            q_rot = apply_rot_head(q_rot, A, self.ax_part)
+            k_rot = apply_rot_head(k_rot, A, self.ax_part)
+            query_states = torch.cat([q_rot, query_states[..., nd:]], dim=-1)
+            key_states = torch.cat([k_rot, key_states[..., nd:]], dim=-1)
+        else:
+            query_states, key_states = apply_rotary_pos_emb(
+                query_states, key_states, cos, sin)
+
+        # q-side relative transport (static, post-RoPE): degenerate control
+        # for the axis field
+        if gains is not None:
+            query_states = apply_gain_head(query_states, gains[(self.layer_idx, "qk_rel")], self.h_part)
+        query_states = apply_rot_head(query_states, M, self.h_part, inverse=True)
+
+        if layer_past is not None:
+            key_states, value_states = layer_past.update(key_states, value_states, base.layer_idx)
+
+        attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
+            base.config._attn_implementation, neox_eager_attention_forward)
+        attn_output, attn_weights = attention_interface(
+            base, query_states, key_states, value_states, attention_mask,
+            scaling=base.scaling,
+            dropout=0.0 if not base.training else base.attention_dropout,
+            **kwargs)
+
+        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        attn_output = base.dense(attn_output)
+
+        out = apply_rot(attn_output, R, self.d_part)
+        if gains is not None:
+            out = apply_gain(out, gains[(self.layer_idx, "attn_io")], self.d_part)
+        return out, attn_weights
+
+
+class SandwichNeoXMLP(_SandwichBase):
+    """GELU MLP, same shape as the GPT-2 sandwich (spec §3.1)."""
+
+    def forward(self, hidden_states):
+        field = self.state.field
+        if field is None:
+            return self.base(hidden_states)
+        base = self.base
+        rot = field.rotations()
+        gains = field.gains()
+        R = rot[(self.layer_idx, "mlp_io")]
+        S = rot[(self.layer_idx, "ffn_hidden")]
+
+        u = apply_rot(hidden_states, R, self.d_part, inverse=True)
+        a = base.dense_h_to_4h(u)
+        a = apply_rot(a, S, self.f_part)
+        if gains is not None:
+            a = apply_gain(a, gains[(self.layer_idx, "ffn_hidden")], self.f_part)
+        h = base.act(a)
+        h = apply_rot(h, S, self.f_part, inverse=True)
+        y = base.dense_4h_to_h(h)
+        y = apply_rot(y, R, self.d_part)
+        if gains is not None:
+            y = apply_gain(y, gains[(self.layer_idx, "mlp_io")], self.d_part)
+        return y
 
 
 # ---------------------------------------------------------------------------

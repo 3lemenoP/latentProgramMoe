@@ -2,7 +2,13 @@
 
 Studio runs 2026-08-15, on `runs/e3strong` (3000-step fits for D3).
 
-## P3 — D3 relative-increment transport: FAIL
+## P3 — D3 relative-increment transport: CONTROLS FAIL (flagship pending)
+
+**Amended per `steering-workstreams-a-b.md` §0:** this run used c =
+append-⟨B⟩, which puts the marker first in c_then_b and structurally
+mismatches a_then_b — these are the transport *controls*, not the flagship.
+The token-keying probe and the b⊗a⊗b\* adjoint re-keying candidate (A1)
+never ran. Do not read this section as "transport failed."
 
 Δ_{b|a} = z_ab ⊗ z_a\* transported onto z_c (append, fresh fit 0.995 exact),
 target pipeline c_then_b (oracle fit: 0.815 exact — the ~0.82 plateau again;
@@ -40,7 +46,7 @@ intermediate strength" prediction fails. Consistent with the falsifier.
 
 ## Position in the tree
 
-D2 (one-sided pass) → falsifier holds (P1+P2) → D3 transport FAILS → **D6
-decides**: gauged product vs unconstrained MLP vs both-fail. D6 running
-(5-atom library a–e incl. new rotl/swap2; all 20 ordered pipelines
+D2 (one-sided pass) → falsifier holds (P1+P2) → D3 *controls* fail,
+flagship (A1 token re-keying) pending → D6 running under A3 evaluation
+controls (5-atom library a–e incl. new rotl/swap2; all 20 ordered pipelines
 oracle-fitted; held-out {d_then_b, c_then_a, e_then_d, a_then_e}).

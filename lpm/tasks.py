@@ -188,6 +188,7 @@ def _e3_atoms(vocab: E3Vocab):
         "c": lambda s: list(s) + [vocab.B],                    # append ⟨B⟩
         "d": lambda s: list(s[1:]) + list(s[:1]),              # rotate-left
         "e": lambda s: list(s[1:2]) + list(s[:1]) + list(s[2:]),  # swap first two
+        "f": lambda s: [vocab.B] + list(s),                    # prepend ⟨B⟩ (A1 a′)
     }
 
 
@@ -202,7 +203,10 @@ def e3_output(x: List[int], behavior: str, vocab: E3Vocab) -> List[int]:
     atoms = _e3_atoms(vocab)
     named = {"copy": lambda s: list(s), "prepend": atoms["a"],
              "reverse": atoms["b"], "append": atoms["c"],
-             "rotl": atoms["d"], "swap2": atoms["e"]}
+             "rotl": atoms["d"], "swap2": atoms["e"], "prependB": atoms["f"],
+             # A2 offset-reversal ladder: k pad tokens then reverse(x);
+             # rev_pad1 ≡ b_then_a with pad=⟨A⟩, rev_pad1B ≡ c_then_b (control)
+             "rev_pad2": lambda s: [vocab.A, vocab.A] + list(reversed(s))}
     if behavior in named:
         return named[behavior](x)
     if "_then_" in behavior:

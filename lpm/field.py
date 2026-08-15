@@ -47,24 +47,41 @@ class FieldSpec:
     d_head: int
     d_ff: int
     tie_qk_across_heads: bool = False
+    # rotary axis field (steering doc B0): >0 enables the rope_ax site group
+    # of shape (H, n3(rotary_ndims)) — the program conjugates the RoPE
+    # generators, Ω → R Ω Rᵀ. 0 = no rotary machinery exposed (GPT-2, toy).
+    rotary_ndims: int = 0
 
     @classmethod
     def from_hf_config(cls, cfg, tie_qk_across_heads: bool = False) -> "FieldSpec":
-        """Build from a HF model config. Handles GPT-2 and Llama-family naming."""
+        """Build from a HF model config. Handles GPT-2, Llama-family and
+        GPT-NeoX (Pythia) naming; NeoX gets the rope_ax site group."""
+        rotary_ndims = 0
         if hasattr(cfg, "n_embd"):  # GPT-2 family
             d_model = cfg.n_embd
             n_layers = cfg.n_layer
             n_heads = cfg.n_head
             d_ff = cfg.n_inner if getattr(cfg, "n_inner", None) else 4 * d_model
             d_head = d_model // n_heads
-        else:  # Llama family
+        else:  # Llama / NeoX family
             d_model = cfg.hidden_size
             n_layers = cfg.num_hidden_layers
             n_heads = cfg.num_attention_heads
             d_ff = cfg.intermediate_size
             d_head = getattr(cfg, "head_dim", None) or d_model // n_heads
+            if getattr(cfg, "model_type", "") == "gpt_neox":
+                rp = getattr(cfg, "rope_parameters", None) or {}
+                partial = (rp.get("partial_rotary_factor", None) if hasattr(rp, "get") else None)
+                if partial is None:
+                    partial = getattr(cfg, "rotary_pct", 1.0)
+                rotary_ndims = int(d_head * partial)
         return cls(n_layers=n_layers, d_model=d_model, n_heads=n_heads,
-                   d_head=d_head, d_ff=d_ff, tie_qk_across_heads=tie_qk_across_heads)
+                   d_head=d_head, d_ff=d_ff, tie_qk_across_heads=tie_qk_across_heads,
+                   rotary_ndims=rotary_ndims)
+
+    # -- site groups ---------------------------------------------------------
+    def site_names(self) -> Tuple[str, ...]:
+        return SITE_NAMES + (("rope_ax",) if self.rotary_ndims > 0 else ())
 
     # -- partitions per site group ------------------------------------------
     def partition(self, name: str) -> Partition:
@@ -74,6 +91,10 @@ class FieldSpec:
             return make_partition(self.d_ff)
         if name == "qk_rel":
             return make_partition(self.d_head)
+        if name == "rope_ax":
+            if self.rotary_ndims <= 0:
+                raise KeyError("rope_ax requires rotary_ndims > 0")
+            return make_partition(self.rotary_ndims)
         raise KeyError(name)
 
     def site_shape(self, name: str) -> Tuple[int, ...]:
@@ -81,13 +102,17 @@ class FieldSpec:
         if name == "qk_rel":
             h = 1 if self.tie_qk_across_heads else self.n_heads
             return (h, self.partition(name).n3)
+        if name == "rope_ax":
+            # never tied: same R_ax must go on q AND k per head (relativity),
+            # but heads stay independent
+            return (self.n_heads, self.partition(name).n3)
         return (self.partition(name).n3,)
 
     def site_keys(self) -> List[SiteKey]:
-        return [(l, n) for l in range(self.n_layers) for n in SITE_NAMES]
+        return [(l, n) for l in range(self.n_layers) for n in self.site_names()]
 
     def quats_per_layer(self) -> int:
-        return sum(int(torch.tensor(self.site_shape(n)).prod()) for n in SITE_NAMES)
+        return sum(int(torch.tensor(self.site_shape(n)).prod()) for n in self.site_names())
 
     def layer_site_numel(self, name: str) -> int:
         out = 1

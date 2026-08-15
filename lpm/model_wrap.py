@@ -40,10 +40,13 @@ from .sandwich import (
     SandwichGPT2MLP,
     SandwichLlamaAttention,
     SandwichLlamaMLP,
+    SandwichNeoXAttention,
+    SandwichNeoXMLP,
 )
 
 _GPT2_TYPES = {"gpt2"}
 _LLAMA_TYPES = {"llama", "mistral", "qwen2"}  # same block interface in v5
+_NEOX_TYPES = {"gpt_neox"}                    # Pythia; partial rotary + rope_ax
 
 
 class LatentProgramModel(nn.Module):
@@ -71,10 +74,15 @@ class LatentProgramModel(nn.Module):
             for i, block in enumerate(blocks):
                 block.self_attn = SandwichLlamaAttention(block.self_attn, i, self.state, self.spec)
                 block.mlp = SandwichLlamaMLP(block.mlp, i, self.state, self.spec)
+        elif model_type in _NEOX_TYPES:
+            blocks = base.gpt_neox.layers
+            for i, block in enumerate(blocks):
+                block.attention = SandwichNeoXAttention(block.attention, i, self.state, self.spec)
+                block.mlp = SandwichNeoXMLP(block.mlp, i, self.state, self.spec)
         else:
             raise NotImplementedError(
                 f"model_type={model_type!r} not supported; add a sandwich adapter "
-                f"(supported: {sorted(_GPT2_TYPES | _LLAMA_TYPES)})")
+                f"(supported: {sorted(_GPT2_TYPES | _LLAMA_TYPES | _NEOX_TYPES)})")
         self.n_layers = len(blocks)
 
     # -- loading --------------------------------------------------------------

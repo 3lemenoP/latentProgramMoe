@@ -106,27 +106,50 @@ class GaugedProduct(nn.Module):
 
 
 class MLPOperator(nn.Module):
-    """Shared per-site MLP on concat(q_x, q_y) → raw 4-vector, normalized."""
+    """PRIMARY unconstrained model (A3.2): per-site weight-shared MLP on
+    concat(q_x, q_y) [+ site-group embedding] → raw 4-vector, normalized.
+    Site-locality is the right inductive bias and turns 16 pipelines × ~900
+    sites into a real dataset."""
 
-    def __init__(self, hidden: int = 128):
+    def __init__(self, hidden: int = 128, n_groups: int = 4, group_dim: int = 8):
         super().__init__()
+        self.group_emb = nn.Embedding(n_groups, group_dim)
         self.net = nn.Sequential(
-            nn.Linear(8, hidden), nn.SiLU(),
+            nn.Linear(8 + group_dim, hidden), nn.SiLU(),
             nn.Linear(hidden, hidden), nn.SiLU(),
             nn.Linear(hidden, 4))
 
-    def forward(self, qx, qy):
-        out = self.net(torch.cat([canon(qx), canon(qy)], dim=-1))
+    def forward(self, qx, qy, group_ids):
+        emb = self.group_emb(group_ids)
+        out = self.net(torch.cat([canon(qx), canon(qy), emb], dim=-1))
         return q_normalize(out)
 
 
-def train_operator(op, triples, epochs, lr, tag):
+class FlattenedMLP(nn.Module):
+    """Overfitting CONTROL (A3.2, demoted from verdict-bearing): one MLP over
+    the whole flattened field pair — no site-locality bias, 16 samples."""
+
+    def __init__(self, n_sites: int, hidden: int = 512):
+        super().__init__()
+        self.n_sites = n_sites
+        self.net = nn.Sequential(
+            nn.Linear(8 * n_sites, hidden), nn.SiLU(),
+            nn.Linear(hidden, 4 * n_sites))
+
+    def forward(self, qx, qy):
+        flat = torch.cat([canon(qx), canon(qy)], dim=-1).reshape(-1)
+        out = self.net(flat).reshape(self.n_sites, 4)
+        return q_normalize(out)
+
+
+def train_operator(op, call, triples, epochs, lr, tag):
+    """`call(op, qx, qy)` abstracts the per-op signature."""
     opt = torch.optim.Adam(op.parameters(), lr=lr)
     for ep in range(epochs):
         loss = 0.0
         opt.zero_grad()
         for qx, qy, qt in triples:
-            pred = op(qx, qy)
+            pred = call(op, qx, qy)
             loss = loss + d2_chord(pred, qt).mean()
         loss = loss / len(triples)
         loss.backward()
@@ -135,6 +158,19 @@ def train_operator(op, triples, epochs, lr, tag):
             print(f"[{tag}] epoch {ep} chordal loss {loss.item():.6f}")
     print(f"[{tag}] final chordal loss {loss.item():.6f}")
     return op
+
+
+def site_group_ids(spec) -> torch.Tensor:
+    """Group index per flattened quaternion, matching flatten_q's order."""
+    from lpm.field import SITE_NAMES
+    gid = {n: i for i, n in enumerate(SITE_NAMES)}
+    out = []
+    for (l, n) in spec.site_keys():
+        cnt = 1
+        for s in spec.site_shape(n):
+            cnt *= s
+        out.extend([gid[n]] * cnt)
+    return torch.tensor(out, dtype=torch.long)
 
 
 def main():
@@ -180,45 +216,84 @@ def main():
     train_triples = [triple(p) for p in train_pipes]
 
     n_sites = next(iter(flat_atoms.values())).shape[0]
-    gauged = train_operator(GaugedProduct(n_sites).to(device), train_triples,
-                            args.epochs, 1e-2, "gauged")
-    mlp = train_operator(MLPOperator().to(device), train_triples,
-                         args.epochs, 1e-3, "mlp")
+    gids = site_group_ids(spec).to(device)
+    call_gauged = lambda op, qx, qy: op(qx, qy)          # noqa: E731
+    call_persite = lambda op, qx, qy: op(qx, qy, gids)   # noqa: E731
+    call_flat = lambda op, qx, qy: op(qx, qy)            # noqa: E731
 
-    # ---- phase 3: held-out evaluation -------------------------------------
+    gauged = train_operator(GaugedProduct(n_sites).to(device), call_gauged,
+                            train_triples, args.epochs, 1e-2, "gauged")
+    # A3.4 learning curve for the PRIMARY per-site operator: 8, 12, 16 pipes
+    persite_by_n = {}
+    for n_train in (8, 12, 16):
+        op = train_operator(MLPOperator().to(device), call_persite,
+                            train_triples[:n_train], args.epochs, 1e-3,
+                            f"persite@{n_train}")
+        persite_by_n[n_train] = op
+    persite = persite_by_n[16]
+    flat_ctrl = train_operator(FlattenedMLP(n_sites).to(device), call_flat,
+                               train_triples, args.epochs, 1e-3, "flat-ctrl")
+
+    # ---- phase 3: held-out evaluation (A3.1: task exact is PRIMARY) --------
     report = {"oracle_exact": oracle_exact, "heldout": {}}
     for pipe in HELDOUT:
         x, y = pipe.split("_then_")
         qx, qy = flat_atoms[x], flat_atoms[y]
         qt = flatten_q(oracle[pipe])
-        cands = {
-            "hamilton": hamilton(qy, qx),
-            "gauged": gauged(qx, qy).detach(),
-            "mlp": mlp(qx, qy).detach(),
-        }
-        row = {"oracle_exact": oracle_exact[pipe]}
+        with torch.no_grad():
+            cands = {
+                "hamilton": hamilton(qy, qx),
+                "gauged": call_gauged(gauged, qx, qy),
+                "persite_mlp": call_persite(persite, qx, qy),
+                "flat_mlp_control": call_flat(flat_ctrl, qx, qy),
+            }
+        weak = oracle_exact[pipe] < 0.9
+        row = {"oracle_exact": oracle_exact[pipe], "weak_oracle": weak}
         for name, q in cands.items():
-            f = unflatten_to_field(q, spec).to(device)
+            f = unflatten_to_field(q.detach(), spec).to(device)
             e = ordered_accuracy(model, f, pipe, vocab, device)
             row[name] = {"exact": e[0], "token": e[1],
-                         "d_geo_to_oracle": float(d_geo(q, qt).mean())}
+                         "d_geo_to_oracle": float(d_geo(q, qt).mean()),
+                         "d_geo_flag": "weak-oracle" if weak else "ok"}
         report["heldout"][pipe] = row
         print(pipe, json.dumps(row))
 
-    # verdict per companion doc §4.6 tree
+    # learning curve on held-out (task exact, per training-set size)
+    curve = {}
+    for n_train, op in persite_by_n.items():
+        accs = []
+        for pipe in HELDOUT:
+            x, y = pipe.split("_then_")
+            with torch.no_grad():
+                q = call_persite(op, flat_atoms[x], flat_atoms[y])
+            f = unflatten_to_field(q.detach(), spec).to(device)
+            accs.append(ordered_accuracy(model, f, pipe, vocab, device)[0])
+        curve[n_train] = sum(accs) / len(accs)
+    report["persite_learning_curve"] = curve
+    print(f"per-site learning curve (heldout mean exact): {curve}")
+
+    # verdict per companion doc §4.6 tree + A3 controls
     def mean_exact(name):
         return sum(r[name]["exact"] for r in report["heldout"].values()) / len(HELDOUT)
-    g, m, h = mean_exact("gauged"), mean_exact("mlp"), mean_exact("hamilton")
-    report["mean_heldout_exact"] = {"hamilton": h, "gauged": g, "mlp": m}
+    g, m = mean_exact("gauged"), mean_exact("persite_mlp")
+    h, fl = mean_exact("hamilton"), mean_exact("flat_mlp_control")
+    report["mean_heldout_exact"] = {"hamilton": h, "gauged": g,
+                                    "persite_mlp": m, "flat_mlp_control": fl}
+    flat_curve = max(curve.values()) - min(curve.values()) < 0.05
     if g >= 0.5:
         verdict = "gauged product works — ship compose_learned; algebra survives gauged"
     elif m >= 0.5:
         verdict = "only MLP works — group = coordinates, not semantics"
+    elif flat_curve:
+        verdict = ("both fail with FLAT per-site learning curve — meaningful "
+                   "both-fail; retire composition, substrate claims stand")
     else:
-        verdict = "both fail — retire composition; substrate claims stand"
+        verdict = ("both fail but per-site curve still rising — sample-size "
+                   "limited, extend pipeline library before concluding")
     report["verdict"] = verdict
     (d / "report_d6.json").write_text(json.dumps(report, indent=2))
-    print(f"\nD6 mean held-out exact: hamilton {h:.3f}  gauged {g:.3f}  mlp {m:.3f}")
+    print(f"\nD6 mean held-out exact: hamilton {h:.3f}  gauged {g:.3f}  "
+          f"persite {m:.3f}  flat-ctrl {fl:.3f}")
     print(f"D6 verdict: {verdict}")
 
 
