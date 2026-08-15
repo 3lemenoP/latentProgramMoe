@@ -166,6 +166,11 @@ python scripts/eval_encoder.py --config configs/e4_encoder.yaml \
   program slerp on CE A, CE B, and neutral ppl. Program slerp is smooth
   (no collapse) but is not the better merge. Report:
   [`docs/reports/e2-merge-french-caps.md`](docs/reports/e2-merge-french-caps.md).
+- **E3 (2026-08-15)**: atomic prepend/reverse programs are exact (1.0);
+  zero-shot Hamilton compose is exact 0.0 and order-blind (non-abelian
+  − abelian ≈ −6 / 0 points; spec wants > 20). Report:
+  [`docs/reports/e3-order.md`](docs/reports/e3-order.md). Phase-3
+  compositional curriculum stays **off**.
 - **transformers v5** (≥5.x) module interfaces; base loaded fp32 +
   `attn_implementation="eager"` by default. T4/T5 assert parity with the
   unwrapped base, so interface drift fails loudly.
