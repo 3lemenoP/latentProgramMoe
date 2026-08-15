@@ -103,6 +103,7 @@ def main():
     X = torch.stack([wh.field_to_whitened(fields[n]).flatten() for n in names])
     n_f = len(names)
     D_white = torch.cdist(X, X)
+    D_white.fill_diagonal_(0)
     D_raw = torch.zeros(n_f, n_f)
     for i, a in enumerate(names):
         for j, b in enumerate(names):

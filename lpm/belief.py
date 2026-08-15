@@ -23,10 +23,16 @@ from .whitening import Whitening
 
 
 class WhitenedGaussianBelief:
-    def __init__(self, whitening: Whitening, sigma0: float):
+    def __init__(self, whitening: Whitening, sigma0):
+        """sigma0: scalar or per-site (N,) tensor of prior stds in whitened
+        coords. A per-site vector lets callers cap the RAW angle of
+        low-leverage groups: whitened-isotropic priors are KL-safe but put
+        radian-scale rotations on cheap groups, far from task solutions."""
         self.w = whitening
         N = whitening.n_quats
-        self.lam = torch.full((N,), 1.0 / (sigma0 ** 2))   # precision
+        if not torch.is_tensor(sigma0):
+            sigma0 = torch.full((N,), float(sigma0))
+        self.lam = 1.0 / (sigma0 ** 2)                     # precision (N,)
         self.eta = torch.zeros(N, 3)                       # λ·μ
         self.sigma0 = sigma0
 
@@ -40,23 +46,31 @@ class WhitenedGaussianBelief:
         return 1.0 / self.lam
 
     # -- ops (spec §2.1) -----------------------------------------------------
-    def predict(self, q_drift: float = 0.0, lam_forget: Optional[float] = None):
-        """Σ ← Σ + Q (default) or precision forgetting Λ ← λΛ (flag)."""
+    def predict(self, q_drift=0.0, lam_forget: Optional[float] = None):
+        """Σ ← Σ + Q (default) or precision forgetting Λ ← λΛ (flag).
+        q_drift: scalar or per-site (N,) tensor of drift stds."""
         if lam_forget is not None:
             self.eta = self.eta * lam_forget
             self.lam = self.lam * lam_forget
-        elif q_drift > 0.0:
+            return self
+        q2 = q_drift ** 2 if torch.is_tensor(q_drift) else float(q_drift) ** 2
+        if torch.is_tensor(q2) or q2 > 0.0:
             mu = self.mu
-            self.lam = 1.0 / (1.0 / self.lam + q_drift ** 2)
+            self.lam = 1.0 / (1.0 / self.lam + q2)
             self.eta = mu * self.lam.unsqueeze(-1)
         return self
 
-    def fuse(self, m: torch.Tensor, r_obs: float):
-        """Evidence (mean m whitened (N,3), isotropic precision r_obs⁻²):
-        Λ ← Λ + R, Λμ ← Λμ + Rm. Additive and commutative (T16)."""
+    def fuse(self, m: torch.Tensor, r_obs):
+        """Evidence (mean m whitened (N,3), precision r_obs⁻²; r_obs scalar
+        or per-site (N,)): Λ ← Λ + R, Λμ ← Λμ + Rm. Additive and commutative
+        (T16)."""
         R = 1.0 / (r_obs ** 2)
-        self.lam = self.lam + R
-        self.eta = self.eta + R * m
+        if torch.is_tensor(R):
+            self.lam = self.lam + R
+            self.eta = self.eta + R.unsqueeze(-1) * m
+        else:
+            self.lam = self.lam + R
+            self.eta = self.eta + R * m
         return self
 
     def sample(self, generator: Optional[torch.Generator] = None) -> torch.Tensor:

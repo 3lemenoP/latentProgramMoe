@@ -47,22 +47,27 @@ def tf_eval(model, field, batch, device):
     return float(correct.all(dim=-1).float().mean()), float(out.loss)
 
 
-def whitened_refine(model, wh, v0, batch, device, steps, lr=3e-2):
-    """T gradient steps in the WHITENED parameterization from v0."""
+def whitened_refine(model, wh, v0, batch, device, steps, lr=1e-3):
+    """T gradient steps from whitened point v0, optimizing in RAW
+    rotation-vector geometry (Adam steps then mean uniform raw-angle motion
+    at the proven fit_field lr scale; a whitened-parameterized Adam maps a
+    uniform lr to ~lr/c_g raw steps — radians for low-leverage groups).
+    Interface stays whitened: input and returned point are whitened."""
     if steps == 0:
         return v0.clone()
     ids, lab, attn = (t.to(device) for t in batch)
-    v = v0.clone().to(device).requires_grad_(True)
-    opt = torch.optim.Adam([v], lr=lr)
+    cvec = wh.c_vec.to(device).unsqueeze(-1)
+    v_raw = (v0.to(device) / cvec).clone().requires_grad_(True)
+    opt = torch.optim.Adam([v_raw], lr=lr)
     for _ in range(steps):
-        quats = wh.whitened_to_quats_graph(v)
+        quats = wh.whitened_to_quats_graph(v_raw * cvec)
         field = ProgramField.from_tensors(model.spec, quats)
         with model.program(field):
             loss = model(input_ids=ids, attention_mask=attn, labels=lab).loss
         opt.zero_grad()
         loss.backward()
         opt.step()
-    return v.detach().cpu()
+    return (v_raw.detach() * cvec).cpu()
 
 
 def field_from_v(wh, v):
@@ -72,16 +77,29 @@ def field_from_v(wh, v):
 # ---------------------------------------------------------------------------
 # agent + baselines (equal per-episode compute: `steps` refine steps each)
 # ---------------------------------------------------------------------------
+def make_sigma0(wh, sigma0, theta_cap=0.3):
+    """Per-site prior std: whitened target sigma0 capped so the implied RAW
+    per-site angle stays <= theta_cap (whitened-isotropic priors put
+    radian-scale rotations on low-leverage groups — KL-cheap but far from
+    where task solutions live)."""
+    cap = wh.c_vec * (theta_cap / (3 ** 0.5))
+    return torch.minimum(torch.full_like(wh.c_vec, sigma0), cap)
+
+
 def run_agent(model, wh, stream, device, steps, r_obs, q_drift, sigma0, seed):
-    b = WhitenedGaussianBelief(wh, sigma0=sigma0)
+    b = WhitenedGaussianBelief(wh, sigma0=make_sigma0(wh, sigma0))
+    # drift and observation noise as FRACTIONS of the per-site prior width —
+    # absolute whitened values would be incommensurate with capped groups
+    qvec = q_drift * b.sigma0
+    rvec = r_obs * b.sigma0
     g = torch.Generator().manual_seed(seed)
     log = []
     for ep in stream:
-        b.predict(q_drift=q_drift)
+        b.predict(q_drift=qvec)
         v_s = b.sample(g)
         acc, loss = tf_eval(model, field_from_v(wh, v_s.to(device)), ep.eval, device)
         m = whitened_refine(model, wh, v_s, ep.train, device, steps)
-        b.fuse(m, r_obs)
+        b.fuse(m, rvec)
         pot = b.potency()
         log.append({"i": ep.idx, "task": ep.task, "acc": acc, "loss": loss,
                     "potency_total": pot["total"],
@@ -92,14 +110,19 @@ def run_agent(model, wh, stream, device, steps, r_obs, q_drift, sigma0, seed):
 
 def run_sgd_tracker(model, wh, stream, device, steps, seed, reset_on_spike=False):
     torch.manual_seed(seed)
-    v = 0.001 * torch.randn(wh.n_quats, 3)
+
+    def near_identity():
+        # tiny RAW-angle init (fit_field's sigma scale), expressed whitened
+        return 2e-3 * wh.c_vec.unsqueeze(-1) * torch.randn(wh.n_quats, 3)
+
+    v = near_identity()
     log, losses = [], []
     for ep in stream:
         acc, loss = tf_eval(model, field_from_v(wh, v.to(device)), ep.eval, device)
         if reset_on_spike and len(losses) >= 20:
             recent = torch.tensor(losses[-20:])
             if loss > float(recent.mean() + 3 * recent.std().clamp_min(1e-6)):
-                v = 0.001 * torch.randn(wh.n_quats, 3)
+                v = near_identity()
         losses.append(loss)
         v = whitened_refine(model, wh, v, ep.train, device, steps)
         log.append({"i": ep.idx, "task": ep.task, "acc": acc, "loss": loss})
@@ -277,26 +300,29 @@ def main():
     def episodes_to_threshold(prior_belief, thr=0.5, max_ep=120):
         ts = TaskStream([holdout], seed=args.seed + 2, n_episodes=max_ep)
         b = prior_belief
+        qv = q_drift * b.sigma0
+        rv = r_obs * b.sigma0
         g = torch.Generator().manual_seed(args.seed + 21)
         for ep in ts:
-            b.predict(q_drift=q_drift)
+            b.predict(q_drift=qv)
             v_s = b.sample(g)
             acc, _ = tf_eval(model, field_from_v(wh, v_s.to(device)), ep.eval, device)
             if acc >= thr:
                 return ep.idx
             m = whitened_refine(model, wh, v_s, ep.train, device, args.refine_steps)
-            b.fuse(m, r_obs)
+            b.fuse(m, rv)
         return max_ep
-    fresh_prior = WhitenedGaussianBelief(wh, sigma0=args.sigma0)
+    fresh_prior = WhitenedGaussianBelief(wh, sigma0=make_sigma0(wh, args.sigma0))
     # committed prior: converge on a different task first
-    committed = WhitenedGaussianBelief(wh, sigma0=args.sigma0)
+    committed = WhitenedGaussianBelief(wh, sigma0=make_sigma0(wh, args.sigma0))
     ct = TaskStream(["b_then_a"], seed=args.seed + 3, n_episodes=60)
     g2 = torch.Generator().manual_seed(args.seed + 22)
+    rv_c = r_obs * committed.sigma0
     for ep in ct:
         committed.predict(q_drift=0.0)
         v_s = committed.sample(g2)
         m = whitened_refine(model, wh, v_s, ep.train, device, args.refine_steps)
-        committed.fuse(m, r_obs)
+        committed.fuse(m, rv_c)
     de_novo = {"fresh_prior_eps": episodes_to_threshold(fresh_prior),
                "committed_prior_eps": episodes_to_threshold(committed)}
     print(json.dumps(de_novo))

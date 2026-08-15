@@ -44,7 +44,7 @@ class TaskStream:
         self.switch_points: List[int] = []
         prev = None
         while len(self.schedule) < n_episodes:
-            choices = [t for t in self.tasks if t != prev]
+            choices = [t for t in self.tasks if t != prev] or list(self.tasks)
             task = rng.choice(choices)
             length = rng.randint(n_min, n_max)
             self.switch_points.append(len(self.schedule))
