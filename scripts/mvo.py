@@ -86,7 +86,11 @@ def make_sigma0(wh, sigma0, theta_cap=0.3):
     return torch.minimum(torch.full_like(wh.c_vec, sigma0), cap)
 
 
-def run_agent(model, wh, stream, device, steps, r_obs, q_drift, sigma0, seed):
+def run_agent(model, wh, stream, device, steps, r_obs, q_drift, sigma0, seed,
+              act="sample"):
+    """act='sample': Thompson-act (pays sampling variance at eval).
+    act='map': deploy MAP for the eval, keep Thompson samples for the
+    refine/fuse learning path (spec §5.2 flag)."""
     b = WhitenedGaussianBelief(wh, sigma0=make_sigma0(wh, sigma0))
     # drift and observation noise as FRACTIONS of the per-site prior width —
     # absolute whitened values would be incommensurate with capped groups
@@ -97,7 +101,8 @@ def run_agent(model, wh, stream, device, steps, r_obs, q_drift, sigma0, seed):
     for ep in stream:
         b.predict(q_drift=qvec)
         v_s = b.sample(g)
-        acc, loss = tf_eval(model, field_from_v(wh, v_s.to(device)), ep.eval, device)
+        v_act = b.mu if act == "map" else v_s
+        acc, loss = tf_eval(model, field_from_v(wh, v_act.to(device)), ep.eval, device)
         m = whitened_refine(model, wh, v_s, ep.train, device, steps)
         b.fuse(m, rvec)
         pot = b.potency()
@@ -223,6 +228,7 @@ def main():
     ap.add_argument("--sigma0", type=float, default=0.3)
     ap.add_argument("--grid", action="store_true",
                     help="run the (r_obs, q_drift) validation grid first")
+    ap.add_argument("--act", default="sample", choices=["sample", "map"])
     ap.add_argument("--r-obs", type=float, default=0.2)
     ap.add_argument("--q-drift", type=float, default=0.05)
     ap.add_argument("--device", default="auto")
@@ -267,7 +273,8 @@ def main():
     switch_points = [sp for sp in stream.switch_points if sp < args.episodes]
 
     agent_log, belief = run_agent(model, wh, fresh(), device, args.refine_steps,
-                                  r_obs, q_drift, args.sigma0, seed=args.seed + 11)
+                                  r_obs, q_drift, args.sigma0,
+                                  seed=args.seed + 11, act=args.act)
     print("agent done")
     sgd_log = run_sgd_tracker(model, wh, fresh(), device, args.refine_steps,
                               seed=args.seed + 12)
