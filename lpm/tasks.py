@@ -178,33 +178,37 @@ class E3Vocab:
         return [self.N_SPECIAL + rng.randrange(self.n_payload) for _ in range(L)]
 
 
-def e3_output(x: List[int], behavior: str, vocab: E3Vocab) -> List[int]:
-    """Behaviors: copy | prepend (a) | reverse (b) | append (c) |
-    a_then_b | b_then_a | c_then_b | b_then_c.
+def _e3_atoms(vocab: E3Vocab):
+    """Atom letter -> sequence rewrite. a/b/c are the original three; d/e are
+    the D6 library extensions (novel to the trained base, like all pipelines).
+    """
+    return {
+        "a": lambda s: [vocab.A] + list(s),                    # prepend ⟨A⟩
+        "b": lambda s: list(reversed(s)),                      # reverse
+        "c": lambda s: list(s) + [vocab.B],                    # append ⟨B⟩
+        "d": lambda s: list(s[1:]) + list(s[:1]),              # rotate-left
+        "e": lambda s: list(s[1:2]) + list(s[:1]) + list(s[2:]),  # swap first two
+    }
 
-    Skill a: y=[A]+f(x). Skill b: y=reverse(f(x)). Skill c: y=f(x)+[B].
-    Ordered composition applies the rewrites in sequence:
+
+def e3_output(x: List[int], behavior: str, vocab: E3Vocab) -> List[int]:
+    """Behaviors: copy | prepend (a) | reverse (b) | append (c) | rotl (d) |
+    swap2 (e) | any "<atom>_then_<atom>" ordered pipeline, e.g. a_then_b.
+
+    Ordered composition applies the rewrites in sequence, first-named first:
       a then b:  y = reverse([A] + x) = reverse(x) + [A]
       b then a:  y = [A] + reverse(x)
-      c then b:  y = reverse(x + [B]) = [B] + reverse(x)
-      b then c:  y = reverse(x) + [B]
     """
-    if behavior == "copy":
-        return list(x)
-    if behavior == "prepend":
-        return [vocab.A] + list(x)
-    if behavior == "reverse":
-        return list(reversed(x))
-    if behavior == "append":
-        return list(x) + [vocab.B]
-    if behavior == "a_then_b":
-        return list(reversed(x)) + [vocab.A]
-    if behavior == "b_then_a":
-        return [vocab.A] + list(reversed(x))
-    if behavior == "c_then_b":
-        return [vocab.B] + list(reversed(x))
-    if behavior == "b_then_c":
-        return list(reversed(x)) + [vocab.B]
+    atoms = _e3_atoms(vocab)
+    named = {"copy": lambda s: list(s), "prepend": atoms["a"],
+             "reverse": atoms["b"], "append": atoms["c"],
+             "rotl": atoms["d"], "swap2": atoms["e"]}
+    if behavior in named:
+        return named[behavior](x)
+    if "_then_" in behavior:
+        first, second = behavior.split("_then_")
+        if first in atoms and second in atoms:
+            return atoms[second](atoms[first](x))
     raise KeyError(behavior)
 
 
