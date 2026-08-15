@@ -89,13 +89,22 @@ def main():
     sizes = group_sizes(spec)
     table = []
 
-    def measure_L(ftype, sbar, salt=0):
-        f = single_type_field(spec, ftype, sbar,
-                              seed=args.seed + salt + hash((ftype, round(sbar, 6))) % 9973
-                              ).to(device)
-        kl = kl_to_base(model, f, batches)
-        table.append({"group": ftype, "sbar": sbar, "kl": kl, "L": kl / sbar})
-        print(f"{ftype:11s} s̄={sbar:<8.5f} KL={kl:.6f}  L={kl / sbar:.3f}")
+    def measure_L(ftype, sbar, salt=0, n_draws=4):
+        # KL at fixed (group, s̄) is direction-dependent with heavy tails
+        # (stabilizer structure) — average several random draws or the
+        # calibration/gate comparison is dominated by sampling variance
+        kls = []
+        for j in range(n_draws):
+            f = single_type_field(
+                spec, ftype, sbar,
+                seed=args.seed + salt + 1013 * j
+                + hash((ftype, round(sbar, 6))) % 9973).to(device)
+            kls.append(kl_to_base(model, f, batches))
+        kl = sum(kls) / len(kls)
+        table.append({"group": ftype, "sbar": sbar, "kl": kl, "L": kl / sbar,
+                      "kl_draws": kls})
+        print(f"{ftype:11s} s̄={sbar:<8.5f} KL={kl:.6f}  L={kl / sbar:.3f} "
+              f"(spread {min(kls):.4f}-{max(kls):.4f})")
         return kl / sbar
 
     # pass 1: seed leverage at the requested s̄ grid
@@ -109,13 +118,17 @@ def main():
         theta = min(rho / c, 3.0)
         return max(float(torch.sin(torch.tensor(theta / 2.0)) ** 2), 1e-5)
 
-    def gate(rho, w):
+    def gate(rho, w, n_draws=4):
         kls = {}
         for ftype in spec.site_names():
             sbar = sbar_at(rho, w.c[ftype])
-            f = single_type_field(spec, ftype, sbar,
-                                  seed=args.seed + 31 + hash(ftype) % 997).to(device)
-            kls[ftype] = kl_to_base(model, f, batches)
+            draws = []
+            for j in range(n_draws):
+                f = single_type_field(
+                    spec, ftype, sbar,
+                    seed=args.seed + 31 + 2027 * j + hash(ftype) % 997).to(device)
+                draws.append(kl_to_base(model, f, batches))
+            kls[ftype] = sum(draws) / len(draws)
         vals = list(kls.values())
         return kls, max(vals) / max(min(vals), 1e-12)
 
