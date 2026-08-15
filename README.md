@@ -171,6 +171,10 @@ python scripts/eval_encoder.py --config configs/e4_encoder.yaml \
   − abelian ≈ −6 / 0 points; spec wants > 20). Report:
   [`docs/reports/e3-order.md`](docs/reports/e3-order.md). Phase-3
   stays **off** pending E3′ D4/D6 (`e-suite-analysis-e3prime.md`).
+- **E3′ D1 (2026-08-15):** support cosine 0.39 / OVL 0.48 (not disjoint);
+  κ mean 0.003, behavioral KL 0.005 (commutator silent). Branch:
+  overlapping-but-silent. Report:
+  [`docs/reports/d1-diagnose.md`](docs/reports/d1-diagnose.md).
 - **transformers v5** (≥5.x) module interfaces; base loaded fp32 +
   `attn_implementation="eager"` by default. T4/T5 assert parity with the
   unwrapped base, so interface drift fails loudly.
