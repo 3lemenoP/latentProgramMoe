@@ -162,6 +162,10 @@ python scripts/eval_encoder.py --config configs/e4_encoder.yaml \
   of the expert–base CE gap on french / caps / jsonish / sentiment
   (gains off). Random-orthogonal controls all largely *negative*.
   Report: [`docs/reports/e1-experts.md`](docs/reports/e1-experts.md).
+- **E2 (2026-08-15)**: french+caps midpoint — weight-space linear beats
+  program slerp on CE A, CE B, and neutral ppl. Program slerp is smooth
+  (no collapse) but is not the better merge. Report:
+  [`docs/reports/e2-merge-french-caps.md`](docs/reports/e2-merge-french-caps.md).
 - **transformers v5** (≥5.x) module interfaces; base loaded fp32 +
   `attn_implementation="eager"` by default. T4/T5 assert parity with the
   unwrapped base, so interface drift fails loudly.
