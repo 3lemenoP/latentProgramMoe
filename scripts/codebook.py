@@ -65,7 +65,7 @@ def silhouette(D, labels):
     labels = np.array(labels)
     if len(set(labels.tolist())) < 2:
         return float("nan")
-    return float(silhouette_score(D.numpy(), labels, metric="precomputed"))
+    return float(silhouette_score(D.cpu().numpy(), labels, metric="precomputed"))
 
 
 def main():
