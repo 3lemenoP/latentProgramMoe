@@ -4,8 +4,7 @@ Studio 2 run 2026-08-15, pythia-410m fp32 eager on T4, 200 pile-10k
 sequences × 512 tokens. Matched-activity single-type random fields
 (sin²(θ/2) = s̄, uniform random axes). KL(program ‖ base), full vocab.
 *(v1 run OOM'd in the attention probe after the full KL table printed; v2
-rerun reproduces the table (same seeds) and completes the probe — this file
-finalized from v2.)*
+rerun reproduced the table (same seeds) and completed the probe. Final.)*
 
 ## Leverage table L = KL/s̄
 
@@ -49,6 +48,18 @@ headline plot (per-position KL curves) is in `runs/b2/report_b2.json`
 
 ## Attention-displacement probe (s̄=0.01, rope_ax vs qk_rel)
 
-Raw |Δattn| decays with distance for both (attention itself decays), so the
-normalized ratio |Δattn|/attn_base per distance bin is the meaningful
-number — see v2 output (`attn_disp_*`, `attn_base_*` in the report JSON).
+Normalized displacement |Δattn|/attn_base per relative-distance bin:
+
+| field | rel. near (1–16) | rel. far (128–511) | far/near |
+|---|---:|---:|---:|
+| rope_ax | 0.174 | 0.113 | 0.65 |
+| qk_rel | 0.509 | 0.527 | 1.03 |
+
+At s̄=0.01 the axis field's *attention* displacement does not grow with
+distance (mildly near-concentrated); qk_rel is flat and ~3× larger. The
+distance signature that does hold for rope_ax is in the *output* KL
+(late/early growing with s̄, up to 3.38), i.e. the compounding is visible
+downstream of attention rather than in single-map displacement at this
+weak strength. Probe at higher s̄ is the natural follow-up if the
+attention-level signature matters for B3's interpretation. Full curves:
+`runs/b2/report_b2.json` (`curves`, `attn_disp_*`, `attn_base_*`).
