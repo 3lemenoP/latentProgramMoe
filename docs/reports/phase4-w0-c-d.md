@@ -64,10 +64,17 @@ coords maps a uniform lr to ~lr/c_g raw steps).
 | **agent (Thompson-act)** | 0.575 | 0.366 | 53.1 |
 | static (floor) | 0.184 | 0.757 | 251 |
 
-- **D-1 (agent beats SGD tracker, prior 0.60): FAILED** in the
-  Thompson-act configuration — acting on posterior samples pays sampling
-  variance at eval every episode. (MAP-acting variant run separately —
-  appended below.)
+- **D-1 (agent beats SGD tracker, prior 0.60): FAILED, and the MAP-acting
+  control localizes the failure.** Thompson-act 0.575; MAP-act 0.596
+  (identical D-2/D-4 verdicts, `runs/mvo_map/`). The ~0.02 sampling-variance
+  cost is not the story — the belief UPDATE is: linear-Gaussian fusion
+  accumulates evidence across different regimes into a compromise program,
+  while the memoryless tracker simply follows the current task. The best
+  baseline (reset-on-spike, 0.713) is precisely a crude approximation of
+  what the v1 belief lacks: switch-triggered forgetting. v2 directions, in
+  order of promise: (i) switch-detection driving λ-forgetting or large
+  Q-inflation (the spec's own flag), (ii) mixture / codebook-indexed
+  beliefs with per-regime components, (iii) behaviorally-whitened fusion.
 - **D-2 (potency falls in-regime, rises at switches, prior 0.70):
   CONFIRMED** — canalization and Q-inflation dedifferentiation both appear.
 - **D-3**: not auto-scored in this run (commitment maps logged every 25
