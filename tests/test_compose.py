@@ -3,7 +3,7 @@ T8 at the field level, chordal mean, gain algebra."""
 import pytest
 import torch
 
-from lpm.compose import compose, mean_field, slerp_field
+from lpm.compose import compose, increment, invert_field, mean_field, slerp_field
 from lpm.field import FieldSpec, ProgramField
 from lpm.quaternion import d2_chord, q_normalize
 
@@ -38,6 +38,15 @@ def test_t9_composition_convention_matches_Rb_Ra():
     Ra, Rb, Rc = a.rotations(), b.rotations(), c.rotations()
     for k in a.sites():
         assert (Rc[k] - Rb[k] @ Ra[k]).abs().max() < 1e-5
+
+
+def test_increment_recovers_right_factor():
+    a, b = rand_field(seed=5), rand_field(seed=6)
+    ab = compose(b, a)
+    delta = increment(ab, a)
+    assert field_dist(compose(delta, a), ab) < 1e-6
+    assert field_dist(compose(invert_field(a), a),
+                      ProgramField.identity(SPEC)) < 1e-6
 
 
 def test_composition_order_matters_behaviorally(tiny_gpt2, tiny_ids):

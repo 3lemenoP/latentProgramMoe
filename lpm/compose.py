@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Sequence, Union
 import torch
 
 from .field import FieldSpec, ProgramField, SITE_NAMES, SiteKey
-from .quaternion import hamilton, q_normalize, slerp
+from .quaternion import hamilton, q_conjugate, q_normalize, slerp
 
 AlphaLike = Union[float, torch.Tensor, Dict]
 
@@ -44,6 +44,21 @@ def _merged_rhos(fields: Sequence[ProgramField], combine) -> Optional[Dict[SiteK
                 torch.zeros(spec.site_shape(k[1]), device=dev) for f in fields]
         out[k] = combine(rhos)
     return out
+
+
+def invert_field(field: ProgramField) -> ProgramField:
+    """Sitewise unit inverse: q* = (w, -v). Gains flip sign in log-space (ρ → −ρ)."""
+    spec = field.spec
+    quats = {k: q_conjugate(q_normalize(field.q(*k).float())) for k in spec.site_keys()}
+    rho = None
+    if field.has_gains:
+        rho = {k: -field.rho(*k).float() for k in spec.site_keys()}
+    return ProgramField(spec, quats, rho, trainable=False)
+
+
+def increment(z_yx: ProgramField, z_x: ProgramField) -> ProgramField:
+    """Relative increment Δ_{y|x} = z_yx ⊗ z_x*  (sanity: Δ ⊗ z_x ≡ z_yx)."""
+    return compose(z_yx, invert_field(z_x))
 
 
 def compose(field_b: ProgramField, field_a: ProgramField) -> ProgramField:

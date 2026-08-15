@@ -128,6 +128,31 @@ mixed_plain = np.einsum('bij,bjd->bid', attn, vv)
 mixed_conj = apply_rot(np.einsum('bij,bjd->bid', attn, apply_rot(vv, Rf, n3)), Rf, n3, inverse=True)
 check("dead frame: per-seq value conj cancels", np.abs(mixed_conj - mixed_plain).max(), 1e-9)
 
+# T11: conjugate, coaxial commutator, geodesic report metric
+def q_conjugate(q):
+    return np.concatenate([q[..., :1], -q[..., 1:]], -1)
+
+
+def q_commutator(a, b):
+    a, b = q_normalize(a), q_normalize(b)
+    return hamilton(hamilton(hamilton(a, b), q_conjugate(a)), q_conjugate(b))
+
+
+qc = q_conjugate(q)
+check("T11 R(q*) = R(q)^T", np.abs(q_to_R(qc) - np.swapaxes(q_to_R(q), -1, -2)).max(), 1e-12)
+ident = np.zeros_like(q); ident[..., 0] = 1.0
+prod = hamilton(q, qc)
+check("T11 q ⊗ q* = ±I", np.minimum(np.abs(prod - ident).max(-1), np.abs(prod + ident).max(-1)).max(), 1e-12)
+axis = np.array([1.0, 0.0, 0.0])
+th = rng.uniform(0.1, 3.0, size=(500, 1))
+ph = rng.uniform(0.1, 3.0, size=(500, 1))
+qa = np.concatenate([np.cos(th / 2), np.sin(th / 2) * axis], -1)
+qb = np.concatenate([np.cos(ph / 2), np.sin(ph / 2) * axis], -1)
+comm = q_commutator(qa, qb)
+ident2 = np.zeros_like(comm); ident2[..., 0] = 1.0
+check("T11 coaxial commutator = ±I",
+      np.minimum(np.abs(comm - ident2).max(-1), np.abs(comm + ident2).max(-1)).max(), 1e-10)
+
 print()
 fails = [r for r in results if not r[3]]
 print(f"{len(results) - len(fails)}/{len(results)} checks passed" + ("" if not fails else "  <-- FAILURES PRESENT"))

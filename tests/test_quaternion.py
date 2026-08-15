@@ -10,11 +10,13 @@ import pytest
 try:
     from lpm.quaternion import (
         q_normalize, q_to_R, hamilton, d2_chord, slerp,
+        q_conjugate, q_angle2, q_commutator, d_geo,
         make_partition, apply_rot, apply_rot_head,
     )
 except ImportError:
     from quaternion import (
         q_normalize, q_to_R, hamilton, d2_chord, slerp,
+        q_conjugate, q_angle2, q_commutator, d_geo,
         make_partition, apply_rot, apply_rot_head,
     )
 
@@ -131,6 +133,33 @@ def test_automorphism():
     lhs = (B @ A @ B.T) @ (B @ C @ B.T)
     rhs = B @ (A @ C) @ B.T
     assert (lhs - rhs).abs().max() < 1e-10
+
+
+def test_t11_conjugate_commutator_geo():
+    """E3′ T11: conjugate is inverse; coaxial commutator is identity."""
+    q = rand_q(1000)
+    ident = torch.zeros(1000, 4, dtype=DT)
+    ident[:, 0] = 1.0
+    qc = q_conjugate(q)
+    assert (q_to_R(qc) - q_to_R(q).transpose(-1, -2)).abs().max() < 1e-12
+    prod = hamilton(q, qc)
+    end = torch.minimum((prod - ident).abs().amax(-1), (prod + ident).abs().amax(-1))
+    assert end.max() < 1e-12
+    n = torch.tensor([1.0, 0.0, 0.0], dtype=DT)
+    th = torch.rand(500, dtype=DT) * 3.0 + 0.1
+    ph = torch.rand(500, dtype=DT) * 3.0 + 0.1
+    half = torch.stack([th, ph], dim=-1) / 2
+    axis = n.expand(500, 3)
+    qa = torch.cat([torch.cos(half[:, :1]), torch.sin(half[:, :1]) * axis], dim=-1)
+    qb = torch.cat([torch.cos(half[:, 1:]), torch.sin(half[:, 1:]) * axis], dim=-1)
+    comm = q_commutator(qa, qb)
+    cend = torch.minimum((comm - ident[:500]).abs().amax(-1),
+                         (comm + ident[:500]).abs().amax(-1))
+    assert cend.max() < 1e-10
+    assert (q_angle2(q) - (1 - q[..., 0] ** 2)).abs().max() < 1e-12
+    assert (q_angle2(q) - q_angle2(-q)).abs().max() < 1e-12
+    assert d_geo(q, q).abs().max() < 1e-6
+    assert d_geo(q, -q).abs().max() < 1e-6
 
 
 def test_dead_value_frame_math():

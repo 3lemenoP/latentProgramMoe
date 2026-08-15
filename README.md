@@ -36,7 +36,7 @@ lpm/
   config.py        LPMConfig dataclass, mirrored in configs/*.yaml
   tasks.py, utils.py   experiment support for scripts/
 scripts/
-  verify_math.py   numpy certification of the kernel formulas (17 checks)
+  verify_math.py   numpy certification of the kernel formulas (T1–T3/T6/T8/T9 + T11)
   audit_mirsky.py  E0 — reachability floor, gates enable_gains (§4/§10)
   make_experts.py  LoRA experts on contrastive tasks (E1 prerequisites)
   fit_expert.py    phase 1 — per-expert direct fit by distillation (§7)
@@ -80,7 +80,7 @@ all quaternion math in fp32.
 ## Test gates
 
 ```bash
-python scripts/verify_math.py        # M0 pre-gate: 17/17 numpy certification
+python scripts/verify_math.py        # M0 pre-gate: 20/20 numpy certification
 pytest -q -m "not gpt2"              # fast offline suite (tiny random models)
 pytest -q -m gpt2                    # M1 acceptance on real GPT-2 small
 ```
@@ -170,7 +170,7 @@ python scripts/eval_encoder.py --config configs/e4_encoder.yaml \
   zero-shot Hamilton compose is exact 0.0 and order-blind (non-abelian
   − abelian ≈ −6 / 0 points; spec wants > 20). Report:
   [`docs/reports/e3-order.md`](docs/reports/e3-order.md). Phase-3
-  compositional curriculum stays **off**.
+  stays **off** pending E3′ D4/D6 (`e-suite-analysis-e3prime.md`).
 - **transformers v5** (≥5.x) module interfaces; base loaded fp32 +
   `attn_implementation="eager"` by default. T4/T5 assert parity with the
   unwrapped base, so interface drift fails loudly.

@@ -8,10 +8,9 @@ Conventions, fixed project-wide:
 - All quaternion math in fp32 (or fp64 in tests); rotation matrices are cast to
   the activation dtype inside apply_rot / apply_rot_head.
 
-Formulas certified against the numpy twin (verify_math.py): 17/17 property
-checks pass at ~1e-15 (orthogonality, homomorphism, sign invariance, slerp
-endpoints/antipodal stability, block-diag equivalence, spectrum preservation,
-automorphism, dead-frame cancellation).
+Formulas certified against the numpy twin (verify_math.py): 20/20 property
+checks pass at ~1e-15 (T1–T3/T6/T8/T9 + T11 conjugate/commutator, plus
+block-diag, automorphism, dead-frame).
 
 Everything else in the repo imports from this module; no re-implementations.
 """
@@ -21,6 +20,7 @@ import torch
 
 __all__ = [
     "q_normalize", "q_to_R", "hamilton", "d2_chord", "slerp",
+    "q_conjugate", "q_angle2", "q_commutator", "d_geo",
     "Partition", "make_partition", "apply_rot", "apply_rot_head",
 ]
 
@@ -56,6 +56,33 @@ def hamilton(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 def d2_chord(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Sign-invariant squared distance in [0, 1]: 1 - <a, b>^2. Unit inputs."""
     return 1.0 - (a * b).sum(-1) ** 2
+
+
+def q_conjugate(q: torch.Tensor) -> torch.Tensor:
+    """(w, x, y, z) -> (w, -x, -y, -z). Inverse of a unit quaternion."""
+    return torch.cat([q[..., :1], -q[..., 1:]], dim=-1)
+
+
+def q_angle2(q: torch.Tensor) -> torch.Tensor:
+    """Sign-invariant activity s = 1 - w^2 = sin^2(θ/2) ∈ [0, 1]. Unit inputs
+    after normalize-in-forward (raw fields are normalized here)."""
+    w = q_normalize(q)[..., 0]
+    return 1.0 - w * w
+
+
+def q_commutator(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Group commutator a ⊗ b ⊗ a* ⊗ b* on unit quaternions."""
+    a = q_normalize(a)
+    b = q_normalize(b)
+    return hamilton(hamilton(hamilton(a, b), q_conjugate(a)), q_conjugate(b))
+
+
+def d_geo(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Reporting metric arccos(|⟨a, b⟩|) ∈ [0, π/2]. Losses stay chordal."""
+    a = q_normalize(a)
+    b = q_normalize(b)
+    c = (a * b).sum(-1).abs().clamp(0.0, 1.0)
+    return torch.acos(c)
 
 
 def slerp(a: torch.Tensor, b: torch.Tensor, t, eps: float = 1e-6) -> torch.Tensor:

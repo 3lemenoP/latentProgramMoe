@@ -166,8 +166,8 @@ def composed_texts(task_a: Task, task_b: Task, split: str = "train",
 # E3 — synthetic ordered seq2seq (spec §10)
 # ---------------------------------------------------------------------------
 class E3Vocab:
-    PAD, BOS, SEP, EOS, A = 0, 1, 2, 3, 4
-    N_SPECIAL = 5
+    PAD, BOS, SEP, EOS, A, B = 0, 1, 2, 3, 4, 5
+    N_SPECIAL = 6
 
     def __init__(self, n_payload: int = 32):
         self.n_payload = n_payload
@@ -179,23 +179,32 @@ class E3Vocab:
 
 
 def e3_output(x: List[int], behavior: str, vocab: E3Vocab) -> List[int]:
-    """Behaviors: copy | prepend (a) | reverse (b) | a_then_b | b_then_a.
+    """Behaviors: copy | prepend (a) | reverse (b) | append (c) |
+    a_then_b | b_then_a | c_then_b | b_then_c.
 
-    Skill a rewrites the program y=f(x) into y=[A]+f(x); skill b rewrites it
-    into y=reverse(f(x)). Ordered composition applies the rewrites in sequence:
+    Skill a: y=[A]+f(x). Skill b: y=reverse(f(x)). Skill c: y=f(x)+[B].
+    Ordered composition applies the rewrites in sequence:
       a then b:  y = reverse([A] + x) = reverse(x) + [A]
       b then a:  y = [A] + reverse(x)
-    The two orders provably differ (position of the [A] token)."""
+      c then b:  y = reverse(x + [B]) = [B] + reverse(x)
+      b then c:  y = reverse(x) + [B]
+    """
     if behavior == "copy":
         return list(x)
     if behavior == "prepend":
         return [vocab.A] + list(x)
     if behavior == "reverse":
         return list(reversed(x))
+    if behavior == "append":
+        return list(x) + [vocab.B]
     if behavior == "a_then_b":
         return list(reversed(x)) + [vocab.A]
     if behavior == "b_then_a":
         return [vocab.A] + list(reversed(x))
+    if behavior == "c_then_b":
+        return [vocab.B] + list(reversed(x))
+    if behavior == "b_then_c":
+        return list(reversed(x)) + [vocab.B]
     raise KeyError(behavior)
 
 

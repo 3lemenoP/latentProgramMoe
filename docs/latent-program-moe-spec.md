@@ -254,6 +254,8 @@ L = KL( p_expert(·|x) ‖ p_program(·|x) )            on expert-domain data
                                                         emergent sharing across experts)
 ```
 
+**Warning (E3′ §3.3):** λ_reg pushes each independently fitted skill toward a *minimal* support. Two skills then tend to occupy disjoint sites, the sitewise Hamilton product abelianizes (`q ⊗ I = q`), and zero-shot composition is vacuously order-blind. When skills are destined for composition, fit them jointly with a shared-support term or mask (E3′ D4). Record the D4-winning variant as the Phase-1 default if that gate passes.
+
 lr 1e-3, cosine, 1–3k steps typical. Deliverable: `z_k` checkpoints + recovered-performance report.
 
 **Phase 2 — encoder amortization.** Meta-train over the task distribution:
@@ -265,13 +267,13 @@ L = λ_geo Σ_sites d2_chord(q̂(demos), q_k)   (regression to Phase-1 targets, 
 
 Sample K ∈ {4, 16, 64} demos per episode. Gradients flow through `apply_rot` into the encoder only.
 
-**Phase 3 — compositional curriculum (after E3 passes).** Episodes of ordered task pairs (a then b): supervise `q̂` toward `compose(z_b, z_a)` and/or end-task loss on composed behavior. Order must be sampled both ways.
+**Phase 3 — compositional curriculum (after E3′ D4 passes, or D6 ships a composition operator).** Episodes of ordered task pairs (a then b): supervise `q̂` toward `compose(z_b, z_a)` and/or end-task loss on composed behavior. Order must be sampled both ways. The original E3 zero-shot-Hamilton gate is superseded (`e-suite-analysis-e3prime.md`).
 
 ---
 
 ## 8. Reference kernels — file `lpm/quaternion.py`
 
-Contains exactly: `q_normalize`, `q_to_R`, `hamilton`, `d2_chord`, `slerp`, `make_partition`, `apply_rot`, `apply_rot_head`. All pure functions, no module state, property-tested (§9). Everything else imports from here; no re-implementations elsewhere in the repo.
+Contains exactly: `q_normalize`, `q_to_R`, `hamilton`, `d2_chord`, `slerp`, `q_conjugate`, `q_angle2`, `q_commutator`, `d_geo`, `make_partition`, `apply_rot`, `apply_rot_head`. All pure functions, no module state, property-tested (§9). Everything else imports from here; no re-implementations elsewhere in the repo.
 
 ---
 
@@ -289,6 +291,7 @@ Contains exactly: `q_normalize`, `q_to_R`, `hamilton`, `d2_chord`, `slerp`, `mak
 | T8 | slerp endpoints: `slerp(a,b,0)=a`, `slerp(a,b,1)=±b`; output unit-norm; antipodal inputs don't NaN | atol 1e-6 |
 | T9 | composition order: `compose(b,a) != compose(a,b)` for generic fields (chordal distance > 0.01 at some site); matches convention `R_b R_a` | — |
 | T10 | gains identity: ρ=0 preserves T4; gains compose additively | atol as T4 |
+| T11 | conjugate is inverse: `R(q*)=R(q)ᵀ`, `q⊗q*=±I`; coaxial commutator is identity | atol 1e-6 |
 
 T4 and T5 are the theory-in-code checks; if either fails, the wiring is wrong — stop and fix before training anything.
 
@@ -302,7 +305,7 @@ T4 and T5 are the theory-in-code checks; if either fails, the wiring is wrong �
 
 **E2 — geodesic merging.** Pairs of E1 experts: `slerp_field` at α ∈ {0, .25, .5, .75, 1} vs weight-space linear and weight-space slerp of the LoRA-merged checkpoints. Metrics: both tasks' scores at midpoint + perplexity spike on neutral text. Sweep one per-layer schedule (early layers pinned to A, late interpolated).
 
-**E3 — order sensitivity (the falsifier).** Small transformer trained from scratch on synthetic seq2seq where composition order provably matters, e.g. a = "prepend token ⟨A⟩", b = "reverse sequence" (a∘b ≠ b∘a). Learn `z_a`, `z_b` separately; evaluate `compose(z_b, z_a)` and `compose(z_a, z_b)` against ground-truth ordered behaviors, zero-shot. **Abelian baseline**: constrain every site to a fixed learned axis, `q = (cos θ/2, sin θ/2 · a_site)`, θ the only free parameter — all programs then commute, and composition is provably order-blind. Pass: non-abelian ordered accuracy − abelian ordered accuracy > 20 points, and swapped-order predictions differ in the right direction.
+**E3 — order sensitivity (superseded as a gate by E3′).** Original protocol: small from-scratch transformer; independently fitted `z_a` (prepend) / `z_b` (reverse); zero-shot Hamilton compose vs abelian baseline. Studio result 2026-08-15: atoms 1.0 exact, compose 0.0 exact and order-blind. See `docs/reports/e3-order.md`. **E3′** (`e-suite-analysis-e3prime.md` §4) is the composition suite: D1 support/commutator diagnostic, D2 oracle pipelines, D3 transport, D4 shared-support refit (new Phase-3 gate), D5 strength scan, D6 learned operator. E5 (conjugation transport) is D3.
 
 **E4 — encoder generalization.** Held-out task suite; conditions: encoder-only (T=0), encoder+refine (T=50), refine-from-identity (no encoder), per-task direct fit (oracle), LoRA-per-task (upper baseline). Report vs K demos.
 
