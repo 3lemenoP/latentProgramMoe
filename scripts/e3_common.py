@@ -11,6 +11,20 @@ from lpm.tasks import E3Vocab, e3_examples, e3_output
 from lpm.utils import cosine_lr, set_lr
 
 
+def make_base_rotary(vocab: E3Vocab, device):
+    """4-layer toy with FULL rotary (B3: rotary_pct=1.0 for maximal axis
+    effect), same size class as make_base."""
+    from transformers import GPTNeoXConfig, GPTNeoXForCausalLM
+    cfg = GPTNeoXConfig(vocab_size=vocab.size, hidden_size=96,
+                        num_hidden_layers=4, num_attention_heads=4,
+                        intermediate_size=384, max_position_embeddings=64,
+                        rotary_pct=1.0, hidden_dropout=0.0,
+                        attention_dropout=0.0,
+                        bos_token_id=vocab.BOS, eos_token_id=vocab.EOS)
+    cfg._attn_implementation = "eager"
+    return GPTNeoXForCausalLM(cfg).to(device)
+
+
 def make_base(vocab: E3Vocab, device) -> GPT2LMHeadModel:
     cfg = GPT2Config(vocab_size=vocab.size, n_positions=64, n_embd=96,
                      n_layer=4, n_head=4, n_inner=384,
@@ -28,11 +42,17 @@ def save_base(model: GPT2LMHeadModel, path: str) -> None:
                path)
 
 
-def load_base(path: str, device) -> GPT2LMHeadModel:
+def load_base(path: str, device):
     blob = torch.load(path, map_location="cpu", weights_only=False)
-    cfg = GPT2Config(**blob["config"])
-    cfg._attn_implementation = "eager"
-    model = GPT2LMHeadModel(cfg)
+    if blob["config"].get("model_type") == "gpt_neox":
+        from transformers import GPTNeoXConfig, GPTNeoXForCausalLM
+        cfg = GPTNeoXConfig(**blob["config"])
+        cfg._attn_implementation = "eager"
+        model = GPTNeoXForCausalLM(cfg)
+    else:
+        cfg = GPT2Config(**blob["config"])
+        cfg._attn_implementation = "eager"
+        model = GPT2LMHeadModel(cfg)
     model.load_state_dict(blob["state_dict"])
     return model.to(device).eval()
 
@@ -74,9 +94,24 @@ def train_base(model, vocab, device, steps=3000, batch=64, lr=3e-4, seed=0,
 
 def fit_field(model: LatentProgramModel, field, behavior, vocab, device,
               steps=1500, batch=64, lr=1e-3, seed=1, extra_params=(), tag="",
-              overlap_with=None, overlap_coef=0.0):
+              overlap_with=None, overlap_coef=0.0, freeze_sites=()):
+    """freeze_sites: site-group names pinned to exact identity and excluded
+    from optimization (B3 conjugation-only condition freezes 'rope_ax')."""
     ids, lab, attn = e3_examples(behavior, 4000, vocab, seed=seed)
-    params = list(dict.fromkeys(list(field.parameters()) + list(extra_params)))
+    if freeze_sites:
+        with torch.no_grad():
+            for (l, n) in field.spec.site_keys():
+                if n in freeze_sites:
+                    q = field.q(l, n)
+                    q.zero_()
+                    q[..., 0] = 1.0
+        field.invalidate()
+        frozen = {id(field.q(l, n)) for (l, n) in field.spec.site_keys()
+                  if n in freeze_sites}
+        field_params = [p for p in field.parameters() if id(p) not in frozen]
+    else:
+        field_params = list(field.parameters())
+    params = list(dict.fromkeys(field_params + list(extra_params)))
     opt = torch.optim.AdamW(params, lr=lr, weight_decay=0.0)
     g = torch.Generator().manual_seed(seed)
     from lpm.quaternion import q_angle2, q_normalize
