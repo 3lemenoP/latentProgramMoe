@@ -100,22 +100,54 @@ def main():
         ba = compose(za, zb)
         ids, _, attn = e3_examples("copy", 64, vocab, seed=7)
         ids, attn = ids.to(device), attn.to(device)
-        with torch.no_grad():
-            with model.program(ab):
-                la = model(input_ids=ids, attention_mask=attn).logits
-            with model.program(ba):
-                lb = model(input_ids=ids, attention_mask=attn).logits
-        pa = F.log_softmax(la, dim=-1)
-        pb = F.softmax(lb, dim=-1)
-        kl = F.kl_div(pa.flatten(0, 1), pb.flatten(0, 1), reduction="batchmean").item()
-        lines += ["", "## Behavioral commutator",
-                  f"- mean KL compose(b,a) ‖ compose(a,b) on probe: **{kl:.6f}**"]
 
-    pred = "disjoint-support artifact (§3.2)" if (kappa_mean < 1e-3 and cos < 0.2) \
-        else "overlapping but silent" if kappa_mean < 1e-3 \
-        else "live geometric commutator — check behavioral KL"
-    lines += ["", f"**D1 reading:** {pred}",
-              f"(low cosine + κ≈0 → independently fitted skills sit on disjoint sites.)"]
+        def _logits(field):
+            with torch.no_grad():
+                ctx = model.program(field)
+                with ctx:
+                    return model(input_ids=ids, attention_mask=attn).logits
+
+        def _kl(l_p, l_q):
+            """mean KL(p ‖ q) over real tokens."""
+            lp = F.log_softmax(l_p.float(), dim=-1)
+            lq = F.log_softmax(l_q.float(), dim=-1)
+            kl_tok = (lp.exp() * (lp - lq)).sum(-1)
+            return kl_tok[attn.bool()].mean().item()
+
+        la, lb = _logits(ab), _logits(ba)
+        l_base = _logits(None)
+        l_za, l_zb = _logits(za), _logits(zb)
+        kl = _kl(la, lb)
+        # anchor KLs (handoff §3.3): denominators for the order-KL
+        kl_cb = _kl(la, l_base)
+        kl_azb = _kl(l_za, l_zb)
+        lines += ["", "## Behavioral commutator",
+                  f"- mean KL compose(b,a) ‖ compose(a,b) on probe: **{kl:.6f}**",
+                  f"- anchor KL compose(b,a) ‖ base: **{kl_cb:.6f}**",
+                  f"- anchor KL z_a-model ‖ z_b-model: **{kl_azb:.6f}**"]
+
+    # ---- three-regime reading (handoff §3.3) --------------------------------
+    # small-rotation kinematic ceiling: theta = 2 asin(sqrt(s)); orthogonal-axes
+    # group-commutator angle ~ theta_A * theta_B; kappa = sin^2(theta_c / 2)
+    th_a = 2.0 * torch.asin(sa.mean().clamp(0, 1).sqrt())
+    th_b = 2.0 * torch.asin(sb.mean().clamp(0, 1).sqrt())
+    theta_c = (th_a * th_b).item()
+    kappa_ceiling = float(torch.sin(torch.tensor(theta_c / 2.0)) ** 2)
+    ratio = kappa_mean / max(kappa_ceiling, 1e-12)
+    if cos < 0.2 and ratio < 0.3:
+        pred = ("(i) disjoint support — low overlap AND κ far below the "
+                "activity ceiling: skills sit on different sites")
+    elif ratio < 3.0:
+        pred = ("(ii) second-order suppression — κ runs at its kinematic "
+                "ceiling given the activities; amplitude is the only "
+                "suppressor (drive strength, not axes)")
+    else:
+        pred = ("(iii) live-but-stabilizer-bound — κ well above the "
+                "activity-ceiling scale; check whether behavioral KL stays ≈ 0")
+    lines += ["",
+              f"- κ ceiling given activities (θ_A·θ_B mean-field): **{kappa_ceiling:.6f}**"
+              f"  (measured κ mean / ceiling = {ratio:.2f})",
+              f"**D1 reading:** {pred}"]
     Path(args.out).write_text("\n".join(lines), encoding="utf-8")
     print("\n".join(lines))
     print(f"\nwrote {args.out}")

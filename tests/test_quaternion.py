@@ -10,13 +10,13 @@ import pytest
 try:
     from lpm.quaternion import (
         q_normalize, q_to_R, hamilton, d2_chord, slerp,
-        q_conjugate, q_angle2, q_commutator, d_geo,
+        q_conjugate, q_angle2, q_commutator, d_geo, q_pow,
         make_partition, apply_rot, apply_rot_head,
     )
 except ImportError:
     from quaternion import (
         q_normalize, q_to_R, hamilton, d2_chord, slerp,
-        q_conjugate, q_angle2, q_commutator, d_geo,
+        q_conjugate, q_angle2, q_commutator, d_geo, q_pow,
         make_partition, apply_rot, apply_rot_head,
     )
 
@@ -160,6 +160,43 @@ def test_t11_conjugate_commutator_geo():
     assert (q_angle2(q) - q_angle2(-q)).abs().max() < 1e-12
     assert d_geo(q, q).abs().max() < 1e-6
     assert d_geo(q, -q).abs().max() < 1e-6
+
+
+def test_t12_q_pow():
+    """E3′ T12: rotation power. q^1 = canonical(q); q^0 = id; q^2 = ±q⊗q;
+    sign invariance q_pow(-q,λ) = q_pow(q,λ); R(q^λ) continuous in λ."""
+    q = rand_q(1000)
+    canon = torch.where(q[:, :1] < 0, -q, q)
+    ident = torch.zeros(1000, 4, dtype=DT)
+    ident[:, 0] = 1.0
+
+    assert (q_pow(q, 1.0) - canon).abs().max() < 1e-12
+    assert (q_pow(q, 0.0) - ident).abs().max() < 1e-12
+
+    sq = q_pow(q, 2.0)
+    hh = hamilton(q, q)
+    end = torch.minimum((sq - hh).abs().amax(-1), (sq + hh).abs().amax(-1))
+    assert end.max() < 1e-12
+
+    assert (q_pow(-q, 0.37) - q_pow(q, 0.37)).abs().max() < 1e-12
+
+    # unit norm at fractional powers
+    assert (q_pow(q, 1.5).norm(dim=-1) - 1).abs().max() < 1e-12
+
+    # identity input stays identity (eps branch)
+    assert (q_pow(ident, 2.5) - ident).abs().max() == 0
+
+    # R(q^lam) continuous in lam: small dlam -> small rotation change
+    lams = torch.linspace(0.0, 2.0, 41, dtype=DT)
+    Rs = torch.stack([q_to_R(q_pow(q[:64], float(l))) for l in lams])
+    steps = (Rs[1:] - Rs[:-1]).abs().amax(dim=(-1, -2))
+    assert steps.max() < 0.2  # max angle pi * dlam/2 bounds the matrix delta
+
+    # group consistency: q^a ⊗ q^b = ±q^(a+b)
+    lhs = hamilton(q_pow(q, 0.7), q_pow(q, 0.6))
+    rhs = q_pow(q, 1.3)
+    end = torch.minimum((lhs - rhs).abs().amax(-1), (lhs + rhs).abs().amax(-1))
+    assert end.max() < 1e-12
 
 
 def test_dead_value_frame_math():

@@ -20,7 +20,7 @@ import torch
 
 __all__ = [
     "q_normalize", "q_to_R", "hamilton", "d2_chord", "slerp",
-    "q_conjugate", "q_angle2", "q_commutator", "d_geo",
+    "q_conjugate", "q_angle2", "q_commutator", "d_geo", "q_pow",
     "Partition", "make_partition", "apply_rot", "apply_rot_head",
 ]
 
@@ -75,6 +75,25 @@ def q_commutator(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     a = q_normalize(a)
     b = q_normalize(b)
     return hamilton(hamilton(hamilton(a, b), q_conjugate(a)), q_conjugate(b))
+
+
+def q_pow(q: torch.Tensor, lam, eps: float = 1e-8) -> torch.Tensor:
+    """Rotation power q^lam on unit quaternions (..., 4). q_pow(q, 2) = ±q⊗q.
+
+    Canonicalize FIRST: q and -q are the same rotation, but powering must take
+    the shortest representative or results diverge (spec handoff §3.1).
+    """
+    q = torch.where(q[..., :1] < 0, -q, q)
+    w, v = q[..., 0], q[..., 1:]
+    vn = v.norm(dim=-1)
+    theta = 2.0 * torch.atan2(vn, w)                    # in [0, pi]
+    nhat = v / vn.clamp_min(eps).unsqueeze(-1)
+    half = 0.5 * lam * theta
+    out = torch.cat([torch.cos(half).unsqueeze(-1),
+                     torch.sin(half).unsqueeze(-1) * nhat], dim=-1)
+    ident = torch.zeros_like(q)
+    ident[..., 0] = 1.0
+    return torch.where((vn < eps).unsqueeze(-1), ident, out)
 
 
 def d_geo(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:

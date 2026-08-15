@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Sequence, Union
 import torch
 
 from .field import FieldSpec, ProgramField, SITE_NAMES, SiteKey
-from .quaternion import hamilton, q_conjugate, q_normalize, slerp
+from .quaternion import hamilton, q_conjugate, q_normalize, q_pow, slerp
 
 AlphaLike = Union[float, torch.Tensor, Dict]
 
@@ -53,6 +53,17 @@ def invert_field(field: ProgramField) -> ProgramField:
     rho = None
     if field.has_gains:
         rho = {k: -field.rho(*k).float() for k in spec.site_keys()}
+    return ProgramField(spec, quats, rho, trainable=False)
+
+
+def pow_field(field: ProgramField, lam) -> ProgramField:
+    """Sitewise rotation power z^lam via q_pow (P0 exponentiation probe / D5
+    upward strength scan). Gains scale linearly in log-space (ρ → lam·ρ)."""
+    spec = field.spec
+    quats = {k: q_pow(q_normalize(field.q(*k).float()), lam) for k in spec.site_keys()}
+    rho = None
+    if field.has_gains:
+        rho = {k: lam * field.rho(*k).float() for k in spec.site_keys()}
     return ProgramField(spec, quats, rho, trainable=False)
 
 
