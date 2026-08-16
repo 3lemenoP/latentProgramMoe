@@ -47,7 +47,7 @@ class IMMBelief:
                  group_ids: torch.Tensor, group_names: List[str],
                  sigma_init: float = 0.05, sigma_novelty: float = 0.3,
                  beta: float = 5.0, p_stay: float = 0.9, tau: float = 0.7,
-                 t_birth: int = 10):
+                 t_birth: int = 10, novelty_gate: Optional[float] = None):
         """means: K raw (N,3) tensors (codebook medoids). Per-site sigmas are
         RAW angles / √3 per dim, capped at 0.3 rad."""
         N = means[0].shape[0]
@@ -63,6 +63,11 @@ class IMMBelief:
         self.p_stay = p_stay
         self.tau = tau
         self.t_birth = t_birth
+        # spec §3.2: "when all named components' probe losses are high,
+        # novelty wins." The softmax alone fails to deliver this under
+        # winner-drag (a family-close dragged component still edges out the
+        # broad novelty prior), so the gate enforces it directly.
+        self.novelty_gate = novelty_gate
         self.prev_winner: Optional[int] = None
         self._novel_streak = 0
         self._novel_loss_start: Optional[float] = None
@@ -95,20 +100,30 @@ class IMMBelief:
         r = (logit - logit.logsumexp(0)).exp()
         return r.float()
 
+    def decide(self, losses: List[float]):
+        """(responsibilities, winner, gated) — the regime decision, shared by
+        the acting/refining caller and step() so both use the same winner."""
+        r = self.responsibilities(losses)
+        winner = int(r.argmax())
+        gated = (self.novelty_gate is not None and winner != self.k - 1
+                 and min(losses[:-1]) > self.novelty_gate)
+        if gated:
+            winner = self.k - 1          # all named fit poorly: novelty wins
+        return r, winner, gated
+
     def step(self, losses: List[float], m: torch.Tensor,
              r_obs: torch.Tensor, q_drift: Optional[torch.Tensor] = None,
-             t: int = 0) -> Dict:
+             t: int = 0, decision=None) -> Dict:
         """One IMM update: responsibilities from measured losses; fuse the
         refined observation m into the winner (hard if top resp > τ, else
         responsibility-weighted across components — never component-into-
         component); drift; run the birth rule. Returns step info."""
-        r = self.responsibilities(losses)
-        winner = int(r.argmax())
+        r, winner, gated = decision if decision is not None else self.decide(losses)
         comps = self.all_components()
         if q_drift is not None:
             for c in comps:
                 c.predict(q_drift)
-        if float(r[winner]) > self.tau:
+        if gated or float(r[winner]) > self.tau:
             comps[winner].fuse(m, r_obs)
         else:
             for k, c in enumerate(comps):

@@ -69,10 +69,11 @@ def probe_loss(model, field, batch, device, n=8):
 
 
 def run_imm(model, wh, stream, device, steps, means, names, seed,
-            r_obs_raw=0.02, q_drift_raw=1e-3, tag="imm"):
+            r_obs_raw=0.02, q_drift_raw=1e-3, tag="imm", novelty_gate=None):
     spec = model.spec
     N = wh.n_quats
-    belief = IMMBelief(means, names, wh.group_ids, wh.group_names)
+    belief = IMMBelief(means, names, wh.group_ids, wh.group_names,
+                       novelty_gate=novelty_gate)
     r_vec = torch.full((N,), r_obs_raw)
     q_vec = torch.full((N,), q_drift_raw)
     cvec = wh.c_vec.unsqueeze(-1)
@@ -81,14 +82,15 @@ def run_imm(model, wh, stream, device, steps, means, names, seed,
         comps = belief.all_components()
         losses = [probe_loss(model, field_from_v(wh, (c.mu * cvec).to(device)),
                              ep.train, device) for c in comps]
-        r = belief.responsibilities(losses)
-        winner = int(r.argmax())
+        decision = belief.decide(losses)
+        winner = decision[1]
         acc, loss = tf_eval(model, field_from_v(wh, (comps[winner].mu * cvec).to(device)),
                             ep.eval, device)
         m_white = whitened_refine(model, wh, comps[winner].mu * cvec,
                                   ep.train, device, steps)
         m_raw = m_white / cvec
-        info = belief.step(losses, m_raw, r_vec, q_drift=q_vec, t=ep.idx)
+        info = belief.step(losses, m_raw, r_vec, q_drift=q_vec, t=ep.idx,
+                           decision=decision)
         log.append({"i": ep.idx, "task": ep.task, "acc": acc, "loss": loss,
                     "winner": info["winner"], "winner_name": info["winner_name"],
                     "birth": info["birth"],
@@ -110,6 +112,10 @@ def main():
     ap.add_argument("--refine-steps", type=int, default=25)
     ap.add_argument("--device", default="auto")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--novelty-gate", type=float, default=None)
+    ap.add_argument("--imm-only", action="store_true",
+                    help="run only the (gated) IMM stream and score it "
+                         "against the logs of an existing report_mvo_v2.json")
     args = ap.parse_args()
     set_seed(args.seed)
     device = get_device(args.device)
@@ -142,10 +148,52 @@ def main():
     stream = fresh()
     switch_points = [sp for sp in stream.switch_points if sp < args.episodes]
 
+    if args.imm_only:
+        prev = json.loads((out / "report_mvo_v2.json").read_text())
+        imm_log, imm_belief = run_imm(model, wh, fresh(), device,
+                                      args.refine_steps, med_means, med_names,
+                                      seed=args.seed + 11, tag="imm-gated",
+                                      novelty_gate=args.novelty_gate)
+        oracle_log = prev["logs"]["oracle"]
+        oaccs = [x["acc"] for x in oracle_log]
+        tasks_at = [x["task"] for x in oracle_log]
+        accs = [x["acc"] for x in imm_log]
+        first, revisit, seen = [], [], set()
+        for sp in switch_points:
+            task = tasks_at[sp]
+            if sp == 0:
+                seen.add(task)
+                continue
+            rec = None
+            for i in range(sp, len(accs)):
+                lo = max(i - 4, sp)
+                if (sum(accs[lo:i + 1]) / (i + 1 - lo)
+                        >= sum(oaccs[lo:i + 1]) / (i + 1 - lo) - 0.05):
+                    rec = i - sp
+                    break
+            rec = rec if rec is not None else len(accs) - sp
+            (revisit if task in seen else first).append(rec)
+            seen.add(task)
+        from sklearn.metrics import adjusted_rand_score
+        ari = adjusted_rand_score([x["task"] for x in imm_log],
+                                  [x["winner"] for x in imm_log])
+        res = {"novelty_gate": args.novelty_gate,
+               "mean_acc": sum(accs) / len(accs),
+               "first_visit_recovery": sum(first) / max(len(first), 1),
+               "revisit_recovery": sum(revisit) / max(len(revisit), 1),
+               "ari": ari, "births": imm_belief.births,
+               "n_components_end": imm_log[-1]["n_components"],
+               "logs": imm_log}
+        (out / "report_imm_gated.json").write_text(json.dumps(res, indent=2))
+        print(json.dumps({k: v for k, v in res.items() if k != "logs"},
+                         indent=2))
+        return
+
     print("=== streams ===")
     imm_log, imm_belief = run_imm(model, wh, fresh(), device,
                                   args.refine_steps, med_means, med_names,
-                                  seed=args.seed + 11, tag="imm")
+                                  seed=args.seed + 11, tag="imm",
+                                  novelty_gate=args.novelty_gate)
     print("imm done")
     rimm_log, _ = run_imm(model, wh, fresh(), device, args.refine_steps,
                           rand_means, [f"rand{i}" for i in range(len(rand_means))],
