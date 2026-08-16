@@ -1,0 +1,229 @@
+{
+  "activity": {
+    "histogram": [
+      2566.0,
+      1781.0,
+      7133.0,
+      17082.0,
+      23192.0,
+      6703.0,
+      617.0,
+      38.0
+    ],
+    "histogram_bins": [
+      0.0,
+      0.0001,
+      0.0003,
+      0.001,
+      0.003,
+      0.01,
+      0.03,
+      0.1,
+      1.0
+    ],
+    "max": 0.5263625383377075,
+    "mean": 0.005121513269841671
+  },
+  "all_certificates_pass": true,
+  "certificates": {
+    "identity_check": {
+      "logit_scale": 28.779802322387695,
+      "max_abs_delta": 0.0,
+      "pass": true
+    },
+    "lipschitz": {
+      "statement": "program-independent bound by construction (rotations are isometries; see tests T1/T6)",
+      "test_ref": "tests/test_quaternion.py"
+    },
+    "spectrum": {
+      "norm_band": [
+        0.5,
+        2.0
+      ],
+      "ortho_tol": 1e-05,
+      "ortho_worst": 2.384185791015625e-07,
+      "pass": true,
+      "raw_norm_range": [
+        0.5065187215805054,
+        1.2214722633361816
+      ],
+      "svd_spot_checks": 3,
+      "svd_worst_rel": 2.964864506793674e-06
+    },
+    "undo_attestation": {
+      "max_abs_delta": 0.0038683414459228516,
+      "pass": true
+    }
+  },
+  "commitment": {
+    "actuator_class": "content",
+    "actuator_thresholds": {
+      "content": "<=0.05 rope_ax share",
+      "position": ">=0.25 rope_ax share"
+    },
+    "leverage_used": {
+      "attn_io": 18.029364943504333,
+      "ffn_hidden": 50.09089112281799,
+      "mlp_io": 18.029364943504333,
+      "qk_rel": 59.83361005783081,
+      "rope_ax": 3.2264605164527893
+    },
+    "per_band_work": {
+      "attn_io": {
+        "early": 0.7202371944274124,
+        "late": 1.3071466018776485,
+        "mid": 0.6902360901266806
+      },
+      "ffn_hidden": {
+        "early": 1.7058341795459038,
+        "late": 2.746284771507462,
+        "mid": 2.1743980194490806
+      },
+      "mlp_io": {
+        "early": 0.3186629240719888,
+        "late": 0.3751122440017518,
+        "mid": 0.37677494190815
+      },
+      "qk_rel": {
+        "early": 4.126889581488375,
+        "late": 1.953949641694423,
+        "mid": 2.9154662968505107
+      },
+      "rope_ax": {
+        "early": 0.0,
+        "late": 0.0,
+        "mid": 0.0
+      }
+    },
+    "raw_activity_diagnostic": {
+      "attn_io": 0.006280540789399917,
+      "ffn_hidden": 0.005512077497163166,
+      "mlp_io": 0.002474089060948851,
+      "qk_rel": 0.0062648077388682095,
+      "rope_ax": 0.0
+    },
+    "top_sites": [
+      "L23.ffn_hidden[553]",
+      "L16.qk_rel[214]",
+      "L23.ffn_hidden[295]",
+      "L23.ffn_hidden[1187]",
+      "L16.qk_rel[211]",
+      "L23.qk_rel[85]",
+      "L0.qk_rel[174]",
+      "L15.ffn_hidden[751]",
+      "L17.qk_rel[28]",
+      "L0.qk_rel[173]"
+    ],
+    "work_shares": {
+      "attn_io": 0.1400041697125421,
+      "ffn_hidden": 0.34137960616684904,
+      "mlp_io": 0.05515174511049111,
+      "qk_rel": 0.46346447901011784,
+      "rope_ax": 0.0
+    }
+  },
+  "fidelity": {
+    "margin_teacher_minus_program": {
+      "ci95": [
+        -0.09736593812704086,
+        -0.04819704219698906
+      ],
+      "mean": -0.07335138320922852,
+      "n": 64
+    },
+    "recovery": {
+      "ci95": [
+        0.8493000405963359,
+        0.924166610126255
+      ],
+      "n": 64,
+      "recovery": 0.886911402371538
+    },
+    "task_ce": {
+      "base": 3.4962987899780273,
+      "program": 2.921029567718506,
+      "teacher": 2.8476779460906982
+    }
+  },
+  "fingerprint": {
+    "neighbors_all": [
+      {
+        "name": "z_formal_conj_only",
+        "sym_kl": 0.9030833840370178
+      },
+      {
+        "name": "z_medical_conj_only",
+        "sym_kl": 1.4498263597488403
+      },
+      {
+        "name": "z_french_conj_only",
+        "sym_kl": 1.475699245929718
+      },
+      {
+        "name": "z_jsonish_conj_only",
+        "sym_kl": 2.546618938446045
+      },
+      {
+        "name": "z_jsonish_conj_axis",
+        "sym_kl": 2.5533881187438965
+      }
+    ],
+    "neighbors_top3": [
+      {
+        "name": "z_formal_conj_only",
+        "sym_kl": 0.9030833840370178
+      },
+      {
+        "name": "z_medical_conj_only",
+        "sym_kl": 1.4498263597488403
+      },
+      {
+        "name": "z_french_conj_only",
+        "sym_kl": 1.475699245929718
+      }
+    ],
+    "probe_losses": {
+      "neutral:wikitext": 3.224310874938965,
+      "task:hedge": 2.921029567718506
+    }
+  },
+  "gentleness": {
+    "collateral_ratio": {
+      "ci_note": {
+        "ci95": [
+          -0.0004283003509044647,
+          0.05786486715078354
+        ],
+        "mean": 0.02707674726843834,
+        "n": 64
+      },
+      "value": -147771060.46676636
+    },
+    "neutral_ppl": {
+      "base": 29.139131473193878,
+      "program": 25.1362461687538,
+      "teacher": 24.46476490686235
+    }
+  },
+  "identity": {
+    "active_sites@1e-4": 56546,
+    "base": "EleutherAI/pythia-410m",
+    "bytes_8bit_sparse": 395838,
+    "bytes_fp16": 472896,
+    "n_quats": 59112,
+    "program_hash": "75915e1794aa46eb",
+    "raw_params": 236448,
+    "seeds": {
+      "card": 0
+    },
+    "skill": "hedge",
+    "version": "0.1.0"
+  },
+  "limits": "This card certifies stability, size, scope of modification, and reversibility of the program. It does NOT certify content alignment, factuality, or safety of outputs \u2014 bounded modification class is not benign behavior. Unvalidated verbs: multi-skill stacking (composition of programs is retired); validated verbs: select, slerp, swap, undo.",
+  "provenance": {
+    "protocol": "G1-B budget-matched",
+    "steps": 2000,
+    "teacher": "experts-best/hedge/merged"
+  },
+  "schema": "1.0.0"
+}
