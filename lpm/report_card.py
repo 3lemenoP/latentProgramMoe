@@ -118,7 +118,7 @@ def spectrum_certificate(field: ProgramField, base=None, tol_ortho: float = 1e-5
     tampering or corruption); 3 SVD spot-checks on effective matrices."""
     worst_ortho, worst_norm_lo, worst_norm_hi = 0.0, 1.0, 1.0
     for k in field.spec.site_keys():
-        q = field.q(*k).detach().float().reshape(-1, 4)
+        q = field.q(*k).detach().float().cpu().reshape(-1, 4)
         n = q.norm(dim=-1)
         worst_norm_lo = min(worst_norm_lo, float(n.min()))
         worst_norm_hi = max(worst_norm_hi, float(n.max()))
@@ -141,7 +141,7 @@ def spectrum_certificate(field: ProgramField, base=None, tol_ortho: float = 1e-5
             m = re.search(r"\.(\d+)\.", name)
             if m:
                 layer = min(int(m.group(1)), field.spec.n_layers - 1)
-            q = q_normalize(field.q(layer, "attn_io").detach().float())
+            q = q_normalize(field.q(layer, "attn_io").detach().float().cpu())
             R3 = q_to_R(q)
             B = torch.eye(d)
             for i in range(R3.shape[0]):
@@ -223,7 +223,8 @@ def commitment_block(field: ProgramField, leverage: Optional[Dict[str, float]],
 def activity_block(field: ProgramField, prune_curve=None) -> Dict:
     xs = []
     for k in field.spec.site_keys():
-        xs.append(q_angle2(q_normalize(field.q(*k).detach().float())).reshape(-1))
+        xs.append(q_angle2(q_normalize(
+            field.q(*k).detach().float().cpu())).reshape(-1))
     s = torch.cat(xs)
     hist = torch.histogram(s, bins=torch.tensor(HIST_BINS)).hist.tolist()
     out = {"mean": float(s.mean()), "max": float(s.max()),
