@@ -42,6 +42,8 @@ RUNGS = [
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default="runs/b3")
+    ap.add_argument("--rotary-pct", type=float, default=1.0,
+                    help="0.25 = the Gate-1 quarter-rotary bridge twin")
     ap.add_argument("--base-steps", type=int, default=3000)
     ap.add_argument("--fit-steps", type=int, default=3000)
     ap.add_argument("--device", default="auto")
@@ -57,8 +59,9 @@ def main():
     if base_path.exists():
         base = load_base(str(base_path), device)
     else:
-        print("=== rotary toy base (copy/prepend/reverse/append) ===")
-        base = make_base_rotary(vocab, device)
+        print(f"=== rotary toy base pct={args.rotary_pct} "
+              "(copy/prepend/reverse/append) ===")
+        base = make_base_rotary(vocab, device, rotary_pct=args.rotary_pct)
         train_base(base, vocab, device, steps=args.base_steps, seed=args.seed,
                    behaviors=("copy", "prepend", "reverse", "append"))
         save_base(base, str(base_path))

@@ -11,14 +11,15 @@ from lpm.tasks import E3Vocab, e3_examples, e3_output
 from lpm.utils import cosine_lr, set_lr
 
 
-def make_base_rotary(vocab: E3Vocab, device):
-    """4-layer toy with FULL rotary (B3: rotary_pct=1.0 for maximal axis
-    effect), same size class as make_base."""
+def make_base_rotary(vocab: E3Vocab, device, rotary_pct: float = 1.0):
+    """4-layer toy with rotary (B3: pct=1.0 for maximal axis effect;
+    Gate-1 bridge: pct=0.25 quarter-rotary twin ⇒ rotary_ndims=6, two
+    3-blocks per head), same size class as make_base."""
     from transformers import GPTNeoXConfig, GPTNeoXForCausalLM
     cfg = GPTNeoXConfig(vocab_size=vocab.size, hidden_size=96,
                         num_hidden_layers=4, num_attention_heads=4,
                         intermediate_size=384, max_position_embeddings=64,
-                        rotary_pct=1.0, hidden_dropout=0.0,
+                        rotary_pct=rotary_pct, hidden_dropout=0.0,
                         attention_dropout=0.0,
                         bos_token_id=vocab.BOS, eos_token_id=vocab.EOS)
     cfg._attn_implementation = "eager"

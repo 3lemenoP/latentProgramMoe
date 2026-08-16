@@ -149,8 +149,95 @@ class SentimentTask(Task):
         return out[:n]
 
 
+class FormalTask(Task):
+    """Persona/formal-register continuation (Gate-1 G1-B): deterministic
+    formalization transform of wikitext — contractions expanded, informal
+    lexicon replaced. Offline given a wikitext cache."""
+    name = "formal"
+
+    _CONTR = [("n't", " not"), ("'re", " are"), ("'ve", " have"),
+              ("'ll", " will"), ("'m", " am"), ("'d", " would")]
+    _LEX = [("but", "however"), ("so", "therefore"), ("also", "furthermore"),
+            ("get", "obtain"), ("got", "obtained"), ("buy", "purchase"),
+            ("big", "substantial"), ("show", "demonstrate"), ("use", "utilise"),
+            ("used", "utilised"), ("help", "assist"), ("need", "require"),
+            ("ask", "request"), ("start", "commence"), ("end", "conclude"),
+            ("about", "approximately"), ("a lot of", "a considerable number of")]
+
+    @classmethod
+    def formalize(cls, s: str) -> str:
+        import re as _re
+        for a, b in cls._CONTR:
+            s = s.replace(a, b)
+        for a, b in cls._LEX:
+            s = _re.sub(rf"\b{a}\b", b, s)
+            s = _re.sub(rf"\b{a.capitalize()}\b", b.capitalize(), s)
+        return "It should be noted that " + s[0].lower() + s[1:] if s else s
+
+    transform = None  # set after class body (staticmethod-of-classmethod dance)
+
+    def texts(self, split="train", n=2000):
+        return [self.formalize(t) for t in _wikitext(split, n)]
+
+
+FormalTask.transform = staticmethod(FormalTask.formalize)
+
+
+class MedicalTask(Task):
+    """Domain-style continuation: medical-register abstracts (PubMedQA
+    pqa_labeled contexts). Small public dataset; eval pool carved from the
+    front like FrenchTask."""
+    name = "medical"
+    _EVAL_RESERVE = 200
+
+    def _sentences(self, split: str, n: int) -> List[str]:
+        from datasets import load_dataset
+        ds = load_dataset("qiaojin/PubMedQA", "pqa_labeled", split="train")
+        out = []
+        for r in ds:
+            for c in r["context"]["contexts"]:
+                c = c.strip()
+                if len(c) > 80:
+                    out.append(c)
+        if split == "eval":
+            return out[:min(n, self._EVAL_RESERVE)]
+        return out[self._EVAL_RESERVE:self._EVAL_RESERVE + n]
+
+    def texts(self, split="train", n=2000):
+        return self._sentences(split, n)
+
+
+class HedgeTask(Task):
+    """Safety-posture REGISTER (hedging/qualification style) over wikitext
+    content. Scope note (gate1-steering §1, binding): this is a style skill;
+    it must not be framed or evaluated as guardrail modification."""
+    name = "hedge"
+
+    _PRE = ["It is difficult to say with certainty, but ",
+            "While the evidence is mixed, it appears that ",
+            "One should be cautious in interpreting this, yet ",
+            "To the best of current understanding, ",
+            "It would be prudent to note that "]
+    _POST = [" That said, individual circumstances may vary.",
+             " However, this should not be taken as definitive.",
+             " Further verification is advisable.",
+             " Interpretations differ, and caution is warranted.",
+             " A qualified professional should be consulted where it matters."]
+
+    def texts(self, split="train", n=2000):
+        base = _wikitext(split, n)
+        out = []
+        for i, t in enumerate(base):
+            pre = self._PRE[i % len(self._PRE)]
+            post = self._POST[(i // len(self._PRE)) % len(self._POST)]
+            out.append(pre + t[0].lower() + t[1:] + post)
+        return out
+
+
 TASKS: Dict[str, Task] = {t.name: t for t in
-                          (FrenchTask(), CapsTask(), JsonishTask(), SentimentTask())}
+                          (FrenchTask(), CapsTask(), JsonishTask(),
+                           SentimentTask(), FormalTask(), MedicalTask(),
+                           HedgeTask())}
 
 
 def composed_texts(task_a: Task, task_b: Task, split: str = "train",
