@@ -68,6 +68,56 @@ def silhouette(D, labels):
     return float(silhouette_score(D.cpu().numpy(), labels, metric="precomputed"))
 
 
+def g2_metric_rematch(args, spec, wh, fields, names, report_path, out):
+    """Phase-4 v2 §1: fit the M-metric on the library + existing symKL,
+    run the G1 LOO gate (T22) and the G2 clustering rematch."""
+    from sklearn.metrics import adjusted_rand_score
+    from lpm.metric import MetricM, loo_stress
+    from lpm.quaternion import q_log, q_normalize
+    prev = json.loads(Path(report_path).read_text())
+    D_beh = torch.tensor(prev["D_beh"])
+    assert prev["names"] == names, "field library changed since behavioral run"
+
+    def tangent_flat(f):
+        vs = []
+        for k in spec.site_keys():
+            q = q_normalize(f.q(*k).detach().float().cpu()).reshape(-1, 4)
+            vs.append(q_log(q))
+        return torch.cat(vs).flatten()
+
+    V = torch.stack([tangent_flat(fields[n]) for n in names])
+    c_vec = wh.c_vec
+    g1 = loo_stress(V, D_beh, c_vec)
+    print(f"G1 (T22 LOO): M {g1['spearman_M']:.3f} raw {g1['spearman_raw']:.3f} "
+          f"whitened {g1['spearman_whitened']:.3f} pass={g1['G1_pass']}")
+    m = MetricM.fit(V, D_beh, c_vec, meta={"probe_set": "copy/seed7/n200",
+                                           "library": names})
+    m.save(str(out / "metric.json"))
+    D_M = m.pdist2(V).sqrt()
+    D_M.fill_diagonal_(0)
+    rows = []
+    for k in range(2, 7):
+        lm, _ = kmedoids(D_M, k, seed=0)
+        lb = prev["per_k"][k - 2]["labels_behavioral"]
+        lr_ari = prev["per_k"][k - 2]["ari_raw_vs_behavioral"]
+        lw_ari = prev["per_k"][k - 2]["ari_whitened_vs_behavioral"]
+        rows.append({"k": k, "ari_M_vs_behavioral": adjusted_rand_score(lb, lm),
+                     "ari_raw_vs_behavioral": lr_ari,
+                     "ari_whitened_vs_behavioral": lw_ari})
+        print(rows[-1])
+    mean_m = sum(r["ari_M_vs_behavioral"] for r in rows) / len(rows)
+    mean_r = sum(r["ari_raw_vs_behavioral"] for r in rows) / len(rows)
+    mean_w = sum(r["ari_whitened_vs_behavioral"] for r in rows) / len(rows)
+    g2 = {"per_k": rows, "mean_ari": {"M": mean_m, "raw": mean_r,
+                                      "whitened": mean_w},
+          "G2_M_gt_raw": mean_m > mean_r, "G2_M_gt_whitened": mean_m > mean_w,
+          "G1": g1}
+    (out / "report_g2.json").write_text(json.dumps(g2, indent=2))
+    print(f"G2: ARI_M {mean_m:.3f} vs raw {mean_r:.3f} (pass={mean_m > mean_r}) "
+          f"vs whitened {mean_w:.3f} (pass={mean_m > mean_w})")
+    print(f"wrote {out / 'metric.json'} and report_g2.json")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fields-dir", default="runs/e3strong")
@@ -75,6 +125,9 @@ def main():
     ap.add_argument("--whitening", required=True)
     ap.add_argument("--out", default="runs/codebook")
     ap.add_argument("--n-probe", type=int, default=200)
+    ap.add_argument("--g2", action="store_true",
+                    help="fit the M-metric + G1/G2 gates from the existing "
+                         "behavioral report (no new probes)")
     ap.add_argument("--device", default="auto")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
@@ -98,6 +151,11 @@ def main():
     fields = {n: ProgramField.load(str(d / f"z_{n}.pt"),
                                    trainable=False).to(device) for n in names}
     print(f"library: {len(names)} fields: {names}")
+
+    if args.g2:
+        g2_metric_rematch(args, spec, wh, fields, names,
+                          out / "report_codebook.json", out)
+        return
 
     # 1. whitened vectors + raw d_geo matrix + actuator profiles
     X = torch.stack([wh.field_to_whitened(fields[n]).flatten() for n in names])

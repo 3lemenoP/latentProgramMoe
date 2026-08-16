@@ -32,24 +32,43 @@ class Episode:
 class TaskStream:
     def __init__(self, tasks: List[str] = None, seed: int = 0,
                  n_episodes: int = 600, n_min: int = 20, n_max: int = 60,
-                 batch: int = 32, vocab: E3Vocab = None):
+                 batch: int = 32, vocab: E3Vocab = None,
+                 schedule_mode: str = "random"):
+        """schedule_mode='recur3' (v2 spec §3.3) guarantees every task
+        recurs ≥ 3 times — revisits are where memory must pay."""
         self.tasks = list(tasks or DEFAULT_TASKS)
         self.seed = seed
         self.n_episodes = n_episodes
         self.batch = batch
         self.vocab = vocab or E3Vocab()
         rng = random.Random(seed)
-        # schedule: regime lengths + task per regime (no immediate repeats)
         self.schedule: List[str] = []
         self.switch_points: List[int] = []
-        prev = None
-        while len(self.schedule) < n_episodes:
-            choices = [t for t in self.tasks if t != prev] or list(self.tasks)
-            task = rng.choice(choices)
-            length = rng.randint(n_min, n_max)
-            self.switch_points.append(len(self.schedule))
-            self.schedule.extend([task] * length)
-            prev = task
+        if schedule_mode == "recur3":
+            order: List[str] = []
+            for _ in range(3):
+                block = list(self.tasks)
+                rng.shuffle(block)
+                # avoid accidental adjacent repeats across block joins
+                if order and block[0] == order[-1] and len(block) > 1:
+                    block[0], block[1] = block[1], block[0]
+                order.extend(block)
+            i = 0
+            while len(self.schedule) < n_episodes:
+                task = order[i % len(order)]
+                i += 1
+                length = rng.randint(n_min, n_max)
+                self.switch_points.append(len(self.schedule))
+                self.schedule.extend([task] * length)
+        else:
+            prev = None
+            while len(self.schedule) < n_episodes:
+                choices = [t for t in self.tasks if t != prev] or list(self.tasks)
+                task = rng.choice(choices)
+                length = rng.randint(n_min, n_max)
+                self.switch_points.append(len(self.schedule))
+                self.schedule.extend([task] * length)
+                prev = task
         self.schedule = self.schedule[:n_episodes]
         # pre-generate a data pool per task (deterministic), sample batches
         self._pool = {}
