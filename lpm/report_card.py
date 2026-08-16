@@ -166,7 +166,7 @@ def identity_and_undo_certificates(model, field: ProgramField, probe: torch.Tens
                                    device, tol: float = 1e-3) -> Dict:
     ids = probe.to(device)
     base_logits = model(input_ids=ids).logits
-    with model.program(model.identity_field()):
+    with model.program(model.identity_field().to(ids.device)):
         id_logits = model(input_ids=ids).logits
     id_delta = float((id_logits - base_logits).abs().max())
     undone = compose(invert_field(field), field)
