@@ -28,6 +28,9 @@ MANIFEST = [
     ("Start here", "docs/story.md", "2026-09-26", "The story so far",
      "A reading guide: the idea, the campaign and where it stands, with every number sourced to a report below."),
 
+    ("Start here", "docs/system-card.md", "2026-09-26", "System card",
+     "Everything that exists, as mathematics: objects, kernels, forwards, invariants, operations, objectives, belief layer, card, tests, measured constants, laws."),
+
     ("Origin", "docs/latent-program-moe-spec.md", "2026-08-12", "Specification v0.1",
      "The founding document: conventions, program fields, sandwiched modules, the dead-frame theorem, training phases, tests T1–T11, experiments E0–E4."),
     ("Origin", "README.md", "2026-08-16", "README and decisions log",
