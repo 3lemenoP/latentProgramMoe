@@ -105,6 +105,26 @@ figcaption{font-family:var(--sans);font-size:14px;color:var(--ink-2);max-width:7
 .d-sum circle{fill:var(--surface);stroke:currentColor;stroke-width:1.1}
 .d-sum text{fill:currentColor;font-size:14px}
 
+/* plain terms */
+.plain p{max-width:66ch;font-size:18px;line-height:1.6}
+.plain .cards .card p{font-size:16px}
+.plain ol.steps{margin:0;padding-left:0;list-style:none;display:grid;gap:12px;max-width:70ch}
+.plain ol.steps li{display:grid;grid-template-columns:34px 1fr;gap:12px;align-items:start}
+.plain ol.steps li b{font-family:var(--sans);font-size:13px;font-weight:600;color:var(--accent);border:1.5px solid var(--accent);border-radius:50%;width:30px;height:30px;display:grid;place-items:center;margin-top:2px}
+.plain ol.steps li p{font-size:17px}
+.plain .aside{background:var(--surface);border:1px solid var(--line-2);border-left:3px solid var(--pos);border-radius:8px;padding:14px 18px;font-size:16px;color:var(--ink-2);max-width:70ch}
+.plain .aside b{color:var(--ink)}
+.plain .cmp td:first-child{font-family:var(--sans);font-weight:500;color:var(--ink)}
+.plain .cmp td{font-family:var(--serif);font-size:15.5px}
+.plain .gloss{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px 24px}
+.plain .gloss div{display:grid;grid-template-columns:150px 1fr;gap:10px;font-size:15.5px;padding:8px 0;border-bottom:1px solid var(--line-2)}
+.plain .gloss dt{font-family:var(--sans);font-weight:500;font-size:14.5px;color:var(--ink)}
+.plain .gloss dd{margin:0;color:var(--ink-2)}
+.d-plain rect{fill:var(--surface);stroke:currentColor;stroke-width:1.1}
+.d-plain text{fill:currentColor;font-size:12.5px}
+.d-plain .tilt rect{fill:var(--accent-soft);stroke:var(--accent)}
+.d-plain .tilt text{fill:var(--accent);font-weight:500}
+
 /* cards */
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
 .card{background:var(--surface);border:1px solid var(--line-2);border-radius:8px;padding:18px 18px 16px;display:grid;gap:8px;align-content:start}
@@ -267,6 +287,7 @@ table.data td.num,table.data th.num{text-align:right;font-family:var(--mono);fon
     </div>
     <nav class="tabs" role="tablist" aria-label="Sections">
       <button role="tab" data-tab="mechanism" aria-selected="true">How it works</button>
+      <button role="tab" data-tab="plain" aria-selected="false">Plain terms</button>
       <button role="tab" data-tab="campaign" aria-selected="false">Campaign</button>
       <button role="tab" data-tab="results" aria-selected="false">Results</button>
       <button role="tab" data-tab="docs" aria-selected="false">Docs</button>
@@ -565,6 +586,145 @@ table.data td.num,table.data th.num{text-align:right;font-family:var(--mono);fon
 </div>
 </section>
 
+
+<!-- ============================ PLAIN TERMS ============================ -->
+<section class="tab plain" id="tab-plain" role="tabpanel" hidden>
+<div class="wrap">
+  <div class="hero">
+    <div class="eyebrow">In plain terms</div>
+    <h1>Teach a language model a new skill without changing a single one of its numbers.</h1>
+    <p class="lead">This page says what the project is, why anyone would want it, what was tried, and what came of it. No equations. The other tabs have the detail.</p>
+  </div>
+
+  <section class="block">
+    <h2>The problem</h2>
+    <p>A language model is a very large fixed collection of numbers. Teaching it a new habit, such as writing in French or answering in a formal register, normally means adjusting many of those numbers. That is called fine-tuning. It works, but each new habit is a large file to store, it can quietly damage things the model used to do well, and once applied it is hard to remove cleanly.</p>
+  </section>
+
+  <section class="block">
+    <h2>The idea</h2>
+    <p>Leave every number in the model alone. Instead, at each point where the model does its own processing, tilt the information slightly on the way in, let the model do exactly what it always does, then tilt it back on the way out. The tilts are the skill. The model is the same model.</p>
+    <figure>
+      <div class="figbox">
+      <svg viewBox="0 0 900 204" role="img" aria-label="Two rows. Top: text enters the frozen model and comes out as the base answer. Bottom: the same text is tilted before the model, the model does its usual work, the result is tilted back, and the answer shows the skill." class="d-plain">
+        <defs><marker id="arrP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+        <text x="30" y="34" class="d-lab">Without a skill</text>
+        <text x="30" y="62" style="font-size:13px">your text</text>
+        <line x1="100" y1="58" x2="330" y2="58" class="d-flow" marker-end="url(#arrP)"/>
+        <rect x="334" y="38" width="232" height="40" rx="6"/><text x="450" y="62" text-anchor="middle">the model, untouched</text>
+        <line x1="566" y1="58" x2="800" y2="58" class="d-flow" marker-end="url(#arrP)"/>
+        <text x="806" y="62" style="font-size:13px">plain answer</text>
+
+        <text x="30" y="118" class="d-lab">With a skill installed</text>
+        <text x="30" y="146" style="font-size:13px">your text</text>
+        <line x1="100" y1="142" x2="196" y2="142" class="d-flow" marker-end="url(#arrP)"/>
+        <g class="tilt"><rect x="200" y="122" width="110" height="40" rx="6"/><text x="255" y="146" text-anchor="middle">tilt in</text></g>
+        <line x1="310" y1="142" x2="330" y2="142" class="d-flow" marker-end="url(#arrP)"/>
+        <rect x="334" y="122" width="232" height="40" rx="6"/><text x="450" y="146" text-anchor="middle">the model, untouched</text>
+        <line x1="566" y1="142" x2="586" y2="142" class="d-flow" marker-end="url(#arrP)"/>
+        <g class="tilt"><rect x="590" y="122" width="110" height="40" rx="6"/><text x="645" y="146" text-anchor="middle">tilt back</text></g>
+        <line x1="700" y1="142" x2="800" y2="142" class="d-flow" marker-end="url(#arrP)"/>
+        <text x="806" y="146" style="font-size:13px">French answer</text>
+        <text x="450" y="178" text-anchor="middle" class="d-note">The tilts are tiny rotations, thousands of them, one for every small group of three internal signals in every layer.</text>
+        <text x="450" y="194" text-anchor="middle" class="d-note">A skill is the list of those rotations: under half a megabyte.</text>
+      </svg>
+      </div>
+      <figcaption>A rough analogy: rather than rebuilding a camera to take a different kind of photo, you turn the lens. The camera's internals never change, and turning the lens back gives you the original camera.</figcaption>
+    </figure>
+  </section>
+
+  <section class="block">
+    <h2>Why tilting is a good kind of change</h2>
+    <p>Rotations have properties that ordinary edits to the model's numbers do not, and the project leans on all three.</p>
+    <ol class="steps">
+      <li><b>1</b><p><strong>Zero tilt is the original model, exactly.</strong> Set every rotation to "none" and you get the untouched model back, bit for bit. There is a test for this and it runs before anything else.</p></li>
+      <li><b>2</b><p><strong>A rotation cannot make anything louder or quieter.</strong> It changes direction, never size. So a skill can never push the model's internal signals to extremes, however badly it was trained. Random skills are safe to try.</p></li>
+      <li><b>3</b><p><strong>Every skill can be undone exactly.</strong> Rotate back by the same amount and the skill is gone. Each shipped skill carries a certificate that this undo was checked.</p></li>
+    </ol>
+    <div class="aside"><b>One consequence that turned out to matter.</b> Tilting only does something where the model bends information (its "nonlinear" steps). Between two straight-line steps a tilt cancels itself out. The project uses this to know exactly where a skill can and cannot live, and it is also the reason the neat maths of combining skills (below) did not carry over into behaviour.</div>
+  </section>
+
+  <section class="block">
+    <h2>What the experiments found</h2>
+    <div class="cards">
+      <div class="card">
+        <span class="chip pass">worked</span>
+        <h3>The skills are real</h3>
+        <p>On a small model, a skill file captured 84 to 100% of what a conventional fine-tune achieved on four tasks. On a medium model it did <em>better</em> than the fine-tune it was copying, because the fine-tune had memorised its training text and the rotation could not.</p>
+      </div>
+      <div class="card">
+        <span class="chip pass">worked</span>
+        <h3>They do less collateral damage</h3>
+        <p>A French fine-tune made the model roughly five times worse at ordinary English text. The French skill did about half that damage while learning nearly as much French. This follows from property 2 above.</p>
+      </div>
+      <div class="card">
+        <span class="chip fail">did not work</span>
+        <h3>Stacking skills by arithmetic</h3>
+        <p>The founding hope was that "do A, then do B" could be computed from skill A and skill B without any training, because rotations combine so nicely. It never worked, in six different attempts. Skills now combine only by choosing one, blending two, or switching.</p>
+      </div>
+      <div class="card">
+        <span class="chip pass">discovered</span>
+        <h3>Two different kinds of dial</h3>
+        <p>Some rotations change <em>what</em> the model says; a separate set changes <em>where</em> it looks in the text. Tasks that reorder text need the second kind, and giving the skill access to them fixed a failure that the first kind provably could not.</p>
+      </div>
+      <div class="card">
+        <span class="chip part">half worked</span>
+        <h3>A model that remembers which skill to use</h3>
+        <p>The team tried giving the model a running guess about which skill fits the current task. The memory worked in principle, but on the small test setup relearning from scratch was so cheap that remembering never paid off. It might at larger scale.</p>
+      </div>
+      <div class="card">
+        <span class="chip pass">shipped</span>
+        <h3>Every skill comes with an audit sheet</h3>
+        <p>How much of the target behaviour it captures, how much it hurts unrelated text, proof that it can be removed, and a fixed warning that "safe to install" does not mean "says safe things".</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Side by side</h2>
+    <div class="tablewrap">
+    <table class="data cmp">
+      <thead><tr><th></th><th>Conventional fine-tune (LoRA)</th><th>Skill program (this project)</th></tr></thead>
+      <tbody>
+        <tr><td>What changes in the model</td><td>Millions of its numbers</td><td>Nothing; the skill is a separate file of rotations</td></tr>
+        <tr><td>Size of one skill</td><td>About 10 MB on the medium model</td><td>About 0.46 MB</td></tr>
+        <tr><td>How much of the target behaviour it reaches</td><td>100% by definition (it is the target)</td><td>84–120% across the tasks tried; one task failed outright</td></tr>
+        <tr><td>Damage to unrelated text</td><td>Can be large</td><td>Roughly half as much</td></tr>
+        <tr><td>Can it be removed exactly?</td><td>Only by keeping a copy of the original</td><td>Yes, by rotating back; checked per skill</td></tr>
+        <tr><td>Can it destabilise the model?</td><td>Yes, if trained badly</td><td>No, by the nature of rotations</td></tr>
+        <tr><td>Can two skills be stacked without training?</td><td>Sometimes, for similar skills</td><td>No; tested and retired</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Where it stands</h2>
+    <p>Four days of experiments on small and medium models established that the approach produces small, safe, removable skills that match or beat conventional fine-tuning, and that skills cannot be combined by arithmetic. The proposed next step is one run on a large model: build a library of six skills, and test whether a system that picks the right skill on the fly beats retraining or prompting when the task keeps changing.</p>
+  </section>
+
+  <section class="block">
+    <h2>Words you will meet in the other tabs</h2>
+    <dl class="gloss">
+      <div><dt>program, field</dt><dd>The full list of rotation settings that makes up one skill.</dd></div>
+      <div><dt>quaternion</dt><dd>Four numbers that describe one rotation in three dimensions. Each small group of three internal signals gets one.</dd></div>
+      <div><dt>sandwich, conjugation</dt><dd>Tilt in, let the model work, tilt back.</dd></div>
+      <div><dt>identity program</dt><dd>All rotations set to none: the original model.</dd></div>
+      <div><dt>teacher, expert</dt><dd>The conventionally fine-tuned model that a skill is trained to imitate.</dd></div>
+      <div><dt>recovery</dt><dd>How much of the teacher's improvement the skill reproduces. 100% means it matched the teacher.</dd></div>
+      <div><dt>gentleness, collateral</dt><dd>How little the skill hurts the model on unrelated text.</dd></div>
+      <div><dt>slerp</dt><dd>Blending two skills smoothly, part way from one to the other.</dd></div>
+      <div><dt>Hamilton product, compose</dt><dd>Doing one rotation after another. The stacking idea that was retired.</dd></div>
+      <div><dt>content and position actuators</dt><dd>The two kinds of dial: rotations that change what is said, and rotations that change where the model looks in the text.</dd></div>
+      <div><dt>axis field, rope_ax</dt><dd>The position dials, available only on models that track word positions by rotation (most modern ones).</dd></div>
+      <div><dt>report card</dt><dd>The audit sheet shipped with every skill.</dd></div>
+      <div><dt>pre-registered prediction, prior</dt><dd>Before each experiment the team wrote down what they expected and how confident they were, then scored it afterwards.</dd></div>
+      <div><dt>Gate 1, Gate 2</dt><dd>Decision points: is this worth scaling up? Gate 1 is done; Gate 2 is the proposed large-model run.</dd></div>
+    </dl>
+  </section>
+</div>
+</section>
+
 <!-- ============================ CAMPAIGN ============================ -->
 <section class="tab" id="tab-campaign" role="tabpanel" hidden>
 <div class="wrap">
@@ -713,7 +873,7 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
 /* ---------------- tabs ---------------- */
-const TABS = ['mechanism','campaign','results','docs'];
+const TABS = ['mechanism','plain','campaign','results','docs'];
 function showTab(name, push){
   if (!TABS.includes(name)) name = 'mechanism';
   TABS.forEach(t => { $('#tab-'+t).hidden = (t !== name); });
