@@ -48,6 +48,14 @@ tests/             T1–T10 (pytest; `-m gpt2` for real-checkpoint acceptance ru
 configs/           yaml per experiment
 ```
 
+## Visualisation
+
+`docs/visualisation/index.html` is a self-contained interactive overview:
+the sandwich mechanism (with a live one-block lab), the campaign timeline,
+scored results, and a reader for every document in this repo in story order
+(`docs/story.md` first). Open it from disk; rebuild after editing any doc with
+`python scripts/build_visualisation.py`.
+
 ## Install
 
 ```bash
